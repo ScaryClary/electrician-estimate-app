@@ -1,0 +1,21 @@
+name = "electrician-estimate-worker"
+main = "src/worker/index.ts"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Local dev — run `wrangler dev` to start the worker on port 8787
+[dev]
+port = 8787
+
+# Secrets — set these with `wrangler secret put ANTHROPIC_API_KEY`, etc.
+# Never commit actual values here.
+# Required now:
+#   ANTHROPIC_API_KEY
+#   ALLOWED_ORIGIN (e.g. https://electrician-estimate.pages.dev)
+# Future:
+#   HCP_API_KEY
+#   SUPPLIER_API_KEY
+
+[[routes]]
+pattern = "/api/*"
+zone_name = ""
