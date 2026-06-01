@@ -622,6 +622,65 @@ body { margin: 0; }
   white-space: nowrap;
 }
 
+/* ─── Tab bar ─── */
+.tab-bar {
+  display: flex;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 4px;
+  gap: 4px;
+}
+.tab-bar-sm { border-radius: 10px; }
+
+.tab-btn {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+}
+.tab-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+}
+.tab-btn:hover:not(.active) { background: var(--bg-card2); color: var(--text); }
+
+/* ─── Text input section ─── */
+.text-input-section { display: flex; flex-direction: column; gap: 12px; }
+.text-input-hint { color: var(--text-dim); font-size: 14px; margin: 0; }
+
+.job-textarea {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  color: var(--text-h);
+  font-size: 15px;
+  font-family: var(--sans);
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+  min-height: 140px;
+}
+.job-textarea:focus { border-color: var(--accent); }
+.job-textarea::placeholder { color: var(--text-dim); }
+
+.use-example {
+  text-align: left;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.revision-text-section { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+
 /* ─── Mobile tweaks ─── */
 @media (max-width: 480px) {
   .table-header, .table-row {

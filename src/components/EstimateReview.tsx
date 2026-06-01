@@ -7,6 +7,7 @@ interface EstimateReviewProps {
   estimate: Estimate
   onEstimateChange: (estimate: Estimate) => void
   onRevisionAudio: (audio: Blob) => Promise<void>
+  onRevisionText: (text: string) => Promise<void>
   onFinalize: () => void
   isRevising: boolean
 }
@@ -15,10 +16,11 @@ export function EstimateReview({
   estimate,
   onEstimateChange,
   onRevisionAudio,
+  onRevisionText,
   onFinalize,
   isRevising,
 }: EstimateReviewProps) {
-  const [showRevisionRecorder, setShowRevisionRecorder] = useState(false)
+  const [showRevisionPanel, setShowRevisionPanel] = useState(false)
   const [customerNotesExpanded, setCustomerNotesExpanded] = useState(false)
   const [flaggedDismissed, setFlaggedDismissed] = useState(false)
   const [lastChanges, setLastChanges] = useState<string[]>([])
@@ -43,58 +45,53 @@ export function EstimateReview({
   }
 
   async function handleRevisionReady(audio: Blob) {
-    setShowRevisionRecorder(false)
+    setShowRevisionPanel(false)
     await onRevisionAudio(audio)
+    showLastChanges()
+  }
+
+  async function handleRevisionText(text: string) {
+    setShowRevisionPanel(false)
+    await onRevisionText(text)
+    showLastChanges()
+  }
+
+  function showLastChanges() {
     const latest = estimate.revisionHistory[estimate.revisionHistory.length - 1]
     if (latest) setLastChanges(latest.changesApplied)
   }
 
-  const unflaggedCount = estimate.lineItems.filter(i => i.flagged).length
-  const canFinalize = flaggedDismissed || unflaggedCount === 0
+  const flaggedCount = estimate.lineItems.filter(i => i.flagged).length
+  const canFinalize = flaggedDismissed || flaggedCount === 0
 
   return (
     <div className="estimate-review">
-      {/* Job header */}
       <div className="estimate-header">
         <h2 className="job-title">{estimate.jobTitle}</h2>
         <p className="audio-summary">{estimate.audioSummary}</p>
       </div>
 
-      {/* Customer notes */}
       {estimate.customerNotes && (
         <div className="customer-notes-card">
-          <button
-            className="collapsible-header"
-            onClick={() => setCustomerNotesExpanded(x => !x)}
-          >
+          <button className="collapsible-header" onClick={() => setCustomerNotesExpanded(x => !x)}>
             <span>Customer notes</span>
             <span>{customerNotesExpanded ? '▲' : '▼'}</span>
           </button>
-          {customerNotesExpanded && (
-            <p className="customer-notes-body">{estimate.customerNotes}</p>
-          )}
+          {customerNotesExpanded && <p className="customer-notes-body">{estimate.customerNotes}</p>}
         </div>
       )}
 
-      {/* Revision changelog */}
       {lastChanges.length > 0 && (
         <div className="changelog-card">
           <strong>Last revision applied:</strong>
-          <ul>
-            {lastChanges.map((c, i) => <li key={i}>{c}</li>)}
-          </ul>
+          <ul>{lastChanges.map((c, i) => <li key={i}>{c}</li>)}</ul>
         </div>
       )}
 
-      {/* Line items */}
       <LineItemTable items={estimate.lineItems} onUpdate={updateLineItem} />
 
-      {/* Totals */}
       <div className="totals-section">
-        <div className="total-row">
-          <span>Subtotal</span>
-          <span>${estimate.subtotal.toFixed(2)}</span>
-        </div>
+        <div className="total-row"><span>Subtotal</span><span>${estimate.subtotal.toFixed(2)}</span></div>
         <div className="total-row">
           <span>Tax rate (%)</span>
           <input
@@ -106,23 +103,14 @@ export function EstimateReview({
             onChange={(e) => updateTaxRate(parseFloat(e.target.value) || 0)}
           />
         </div>
-        <div className="total-row">
-          <span>Tax</span>
-          <span>${estimate.taxAmount.toFixed(2)}</span>
-        </div>
-        <div className="total-row total-final">
-          <span>Total</span>
-          <span>${estimate.total.toFixed(2)}</span>
-        </div>
+        <div className="total-row"><span>Tax</span><span>${estimate.taxAmount.toFixed(2)}</span></div>
+        <div className="total-row total-final"><span>Total</span><span>${estimate.total.toFixed(2)}</span></div>
       </div>
 
-      {/* Flagged items */}
       {estimate.flaggedItems.length > 0 && (
         <div className="flagged-section">
           <h4>⚠️ Items needing attention</h4>
-          <ul>
-            {estimate.flaggedItems.map((item, i) => <li key={i}>{item}</li>)}
-          </ul>
+          <ul>{estimate.flaggedItems.map((item, i) => <li key={i}>{item}</li>)}</ul>
           {!flaggedDismissed && (
             <button className="btn-ghost" onClick={() => setFlaggedDismissed(true)}>
               Dismiss and proceed
@@ -131,22 +119,21 @@ export function EstimateReview({
         </div>
       )}
 
-      {/* Revision recorder overlay */}
-      {showRevisionRecorder && (
+      {showRevisionPanel && (
         <div className="revision-overlay">
           <RevisionRecorder
             onRevisionReady={handleRevisionReady}
-            onCancel={() => setShowRevisionRecorder(false)}
+            onRevisionText={handleRevisionText}
+            onCancel={() => setShowRevisionPanel(false)}
             isProcessing={isRevising}
           />
         </div>
       )}
 
-      {/* Sticky footer */}
       <div className="sticky-footer">
         <button
           className="btn-primary"
-          onClick={() => setShowRevisionRecorder(true)}
+          onClick={() => setShowRevisionPanel(true)}
           disabled={isRevising}
         >
           🎙 Record revision

@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 
 interface AudioUploadProps {
   onFileReady: (file: File) => void
+  onTextReady: (text: string) => void
 }
 
 const ACCEPTED_TYPES = '.m4a,.mp3,.wav,.mp4,.ogg,.webm,.aac,.flac'
@@ -10,19 +11,25 @@ const ACCEPTED_MIME = [
   'audio/aac', 'audio/flac', 'video/mp4', 'audio/x-m4a',
 ]
 
+const EXAMPLE_JOB = `Replace the 100-amp main panel with a new 200-amp panel. Run two new 20-amp circuits about 40 feet to the garage. Install GFCI outlets in both bathrooms and the kitchen. Customer also wants a dedicated 30-amp circuit for a hot tub on the back patio, about 60 feet from the panel.`
+
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60)
   const s = Math.floor(seconds % 60)
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-export function AudioUpload({ onFileReady }: AudioUploadProps) {
+type Tab = 'upload' | 'text'
+
+export function AudioUpload({ onFileReady, onTextReady }: AudioUploadProps) {
+  const [tab, setTab] = useState<Tab>('upload')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [duration, setDuration] = useState<number | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [recordingSeconds, setRecordingSeconds] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [jobText, setJobText] = useState('')
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -37,7 +44,6 @@ export function AudioUpload({ onFileReady }: AudioUploadProps) {
       return
     }
     setSelectedFile(file)
-    // Try to detect duration
     const url = URL.createObjectURL(file)
     const audio = new Audio(url)
     audio.addEventListener('loadedmetadata', () => {
@@ -95,77 +101,113 @@ export function AudioUpload({ onFileReady }: AudioUploadProps) {
       <div className="upload-hero">
         <div className="upload-icon">⚡</div>
         <h1>Electrician Estimate</h1>
-        <p className="upload-tagline">Upload a recording or job-site note to generate an instant estimate</p>
+        <p className="upload-tagline">Upload a recording or describe the job to generate an instant estimate</p>
       </div>
 
-      {/* Drop zone */}
-      <div
-        className={`drop-zone ${dragOver ? 'drag-over' : ''} ${selectedFile ? 'has-file' : ''}`}
-        onClick={() => !selectedFile && fileInputRef.current?.click()}
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={handleDrop}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept={ACCEPTED_TYPES}
-          style={{ display: 'none' }}
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }}
-        />
-
-        {selectedFile ? (
-          <div className="file-info">
-            <div className="file-icon">🎙️</div>
-            <div className="file-name">{selectedFile.name}</div>
-            {duration !== null && (
-              <div className="file-duration">{formatDuration(duration)}</div>
-            )}
-            <button
-              className="btn-ghost"
-              onClick={(e) => { e.stopPropagation(); setSelectedFile(null); setDuration(null) }}
-            >
-              Choose different file
-            </button>
-          </div>
-        ) : (
-          <div className="drop-prompt">
-            <div className="drop-icon">📁</div>
-            <p><strong>Tap to choose a file</strong> or drag and drop</p>
-            <p className="drop-hint">m4a, mp3, wav, mp4, ogg — any voice memo format</p>
-            {/* Hour-long customer conversations are expected and normal. The Anthropic API handles large files. */}
-          </div>
-        )}
+      {/* Tab switcher */}
+      <div className="tab-bar">
+        <button
+          className={`tab-btn ${tab === 'upload' ? 'active' : ''}`}
+          onClick={() => { setTab('upload'); setError(null) }}
+        >
+          🎙 Audio / Recording
+        </button>
+        <button
+          className={`tab-btn ${tab === 'text' ? 'active' : ''}`}
+          onClick={() => { setTab('text'); setError(null) }}
+        >
+          ✏️ Type description
+        </button>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
 
-      {/* Browser recording option */}
-      {!selectedFile && (
-        <div className="record-section">
-          <div className="record-divider"><span>or record directly</span></div>
-          {isRecording ? (
-            <div className="recording-active">
-              <div className="pulse-ring" />
-              <button className="btn-record-stop" onClick={stopRecording}>
-                ■ Stop ({formatDuration(recordingSeconds)})
-              </button>
+      {tab === 'upload' && (
+        <>
+          <div
+            className={`drop-zone ${dragOver ? 'drag-over' : ''} ${selectedFile ? 'has-file' : ''}`}
+            onClick={() => !selectedFile && fileInputRef.current?.click()}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ACCEPTED_TYPES}
+              style={{ display: 'none' }}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }}
+            />
+            {selectedFile ? (
+              <div className="file-info">
+                <div className="file-icon">🎙️</div>
+                <div className="file-name">{selectedFile.name}</div>
+                {duration !== null && <div className="file-duration">{formatDuration(duration)}</div>}
+                <button className="btn-ghost" onClick={(e) => { e.stopPropagation(); setSelectedFile(null); setDuration(null) }}>
+                  Choose different file
+                </button>
+              </div>
+            ) : (
+              <div className="drop-prompt">
+                <div className="drop-icon">📁</div>
+                <p><strong>Tap to choose a file</strong> or drag and drop</p>
+                <p className="drop-hint">m4a, mp3, wav, mp4, ogg — any voice memo format</p>
+              </div>
+            )}
+          </div>
+
+          {!selectedFile && (
+            <div className="record-section">
+              <div className="record-divider"><span>or record directly</span></div>
+              {isRecording ? (
+                <div className="recording-active">
+                  <div className="pulse-ring" />
+                  <button className="btn-record-stop" onClick={stopRecording}>
+                    ■ Stop ({formatDuration(recordingSeconds)})
+                  </button>
+                </div>
+              ) : (
+                <button className="btn-record-start" onClick={startRecording}>
+                  🎙 Record voice note
+                </button>
+              )}
             </div>
-          ) : (
-            <button className="btn-record-start" onClick={startRecording}>
-              🎙 Record voice note
+          )}
+
+          {selectedFile && (
+            <button className="btn-primary btn-process" onClick={() => onFileReady(selectedFile)}>
+              Process recording →
             </button>
           )}
-        </div>
+        </>
       )}
 
-      {selectedFile && (
-        <button
-          className="btn-primary btn-process"
-          onClick={() => onFileReady(selectedFile)}
-        >
-          Process recording →
-        </button>
+      {tab === 'text' && (
+        <div className="text-input-section">
+          <p className="text-input-hint">
+            Describe the job in plain language — exactly like you'd explain it to a helper.
+          </p>
+          <textarea
+            className="job-textarea"
+            placeholder={EXAMPLE_JOB}
+            value={jobText}
+            onChange={(e) => setJobText(e.target.value)}
+            rows={7}
+          />
+          <button
+            className="btn-ghost use-example"
+            onClick={() => setJobText(EXAMPLE_JOB)}
+          >
+            Use example job
+          </button>
+          <button
+            className="btn-primary btn-process"
+            disabled={jobText.trim().length < 20}
+            onClick={() => onTextReady(jobText.trim())}
+          >
+            Generate estimate →
+          </button>
+        </div>
       )}
     </div>
   )

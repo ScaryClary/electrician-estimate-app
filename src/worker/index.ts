@@ -1,9 +1,8 @@
 /**
  * Cloudflare Worker — all backend logic lives here.
- * Secrets configured in wrangler.toml (never in the frontend):
- *   - ANTHROPIC_API_KEY
- *   - HCP_API_KEY (future)
- *   - SUPPLIER_API_KEY (future)
+ * Secrets configured via wrangler secret put or .dev.vars (local only):
+ *   - ANTHROPIC_API_KEY  (required)
+ *   - ALLOWED_ORIGIN     (e.g. https://your-pages-domain.pages.dev, or * for dev)
  */
 
 import Anthropic from '@anthropic-ai/sdk'
@@ -13,40 +12,48 @@ interface Env {
   ALLOWED_ORIGIN: string
 }
 
-const ESTIMATE_SYSTEM_PROMPT = `You are an expert electrician's assistant that analyzes audio recordings and generates detailed, accurate estimates.
+const ESTIMATE_SYSTEM_PROMPT = `You are an expert electrician's assistant. Given a description of electrical work (either a transcript or a plain text description), generate a detailed, professional estimate.
 
-When processing audio:
-1. Transcribe the full conversation
-2. Identify all distinct electrical job tasks mentioned
-3. For each task, generate labor line items with description, estimated hours, hourly rate ($95/hr default), and subtotal
-4. For each task, infer ALL materials an experienced electrician would need. Think carefully:
-   - If someone says "run a 20-amp circuit 50 feet to the garage," you should infer: 12AWG Romex (estimate footage with 10% waste), a 20A breaker, a single gang box, wire nuts, staples, connector fittings, etc.
-   - Include quantities, units, and realistic prices
-5. For materials, set confidence: "high" for standard items, "medium" for items where quantity is uncertain, "low" for items you're inferring without clear signals
-6. Set priceSource to "ai_estimate" for all materials (supplier API will override later)
-7. Flag any items that need the electrician's review (unusual scope, unclear from audio, etc.)
-8. Generate a 3-5 sentence audioSummary of what was discussed
-9. Extract customerNotes: anything the customer specifically asked for, preferences, concerns
-10. Create a short descriptive jobTitle
+Steps:
+1. Identify all distinct job tasks mentioned (e.g. "replace panel", "run circuit to garage", "install GFCI outlets")
+2. For each task, create labor line items: description, estimated hours, $95/hr rate, subtotal
+3. For each task, infer ALL materials a real electrician would need. Think carefully:
+   - "run a 20-amp circuit 50 feet to the garage" → 12AWG Romex (55ft with waste), 20A breaker, single-gang box, wire nuts, staples, connector fittings, etc.
+   - Include realistic quantities and current market prices
+4. Set confidence: "high" for standard items, "medium" if quantity is uncertain, "low" if you're inferring without clear signal
+5. Flag any items needing the electrician's review (unusual scope, missing info, etc.)
+6. Write a 3-5 sentence audioSummary of the job scope
+7. Extract customerNotes: anything specific the customer requested
+8. Create a short descriptive jobTitle
 
-Return ONLY valid JSON matching this exact schema (no markdown, no explanation):
+Return ONLY valid JSON (no markdown, no explanation):
 {
-  "id": "uuid-v4",
-  "createdAt": "ISO8601",
+  "id": "use crypto.randomUUID()",
+  "createdAt": "ISO8601 timestamp",
   "audioSummary": "string",
   "customerNotes": "string",
   "jobTitle": "string",
   "lineItems": [
     {
-      "id": "uuid-v4",
-      "type": "labor" | "material",
+      "id": "unique string",
+      "type": "labor",
       "description": "string",
       "quantity": number,
-      "unit": "hrs" | "ea" | "ft" | "box" | "roll" | "bag" | "pk" | "lb",
+      "unit": "hrs",
+      "unitPrice": 95,
+      "subtotal": number,
+      "flagged": false
+    },
+    {
+      "id": "unique string",
+      "type": "material",
+      "description": "string",
+      "quantity": number,
+      "unit": "ea|ft|box|roll|bag|pk",
       "unitPrice": number,
       "subtotal": number,
-      "priceSource": "ai_estimate" | "supplier_api" | "needs_review",
-      "confidence": "high" | "medium" | "low",
+      "priceSource": "ai_estimate",
+      "confidence": "high|medium|low",
       "flagged": boolean
     }
   ],
@@ -54,32 +61,27 @@ Return ONLY valid JSON matching this exact schema (no markdown, no explanation):
   "taxRate": 0,
   "taxAmount": 0,
   "total": number,
-  "flaggedItems": ["string"],
+  "flaggedItems": ["string describing flagged items"],
   "revisionHistory": []
 }`
 
-const REVISION_SYSTEM_PROMPT = `You are an expert electrician's assistant. You will receive the current estimate JSON and a transcription of a voice revision from the electrician.
+const REVISION_SYSTEM_PROMPT = `You are an expert electrician's assistant. You have the current estimate JSON and a description of changes to make (either a transcript or plain text).
 
-Apply ALL changes described in the revision. Common revision types:
+Apply ALL changes described. Common types:
 - Changing quantities (hours, footage, count)
-- Adding new line items or entire tasks
+- Adding new line items or tasks
 - Removing items
 - Correcting prices
-- Adding notes
 
-Return ONLY valid JSON with:
-1. The full updated estimate (same schema as before, with all changes applied)
-2. A "changesApplied" array describing each change in plain English
-
-Response format (JSON only, no markdown):
+Return ONLY valid JSON (no markdown):
 {
-  "estimate": { ...full updated estimate... },
+  "estimate": { ...full updated estimate with all changes applied... },
   "changesApplied": ["Changed labor hours on panel replacement: 4 → 6 hrs", "Added: 50A sub-panel disconnect"]
 }`
 
 function corsHeaders(origin: string): Record<string, string> {
   return {
-    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
   }
@@ -88,91 +90,126 @@ function corsHeaders(origin: string): Record<string, string> {
 function jsonResponse(data: unknown, status = 200, origin: string): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: {
-      'Content-Type': 'application/json',
-      ...corsHeaders(origin),
-    },
+    headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
   })
 }
 
-async function fileToBase64(file: File | Blob): Promise<string> {
-  const buffer = await file.arrayBuffer()
-  const bytes = new Uint8Array(buffer)
-  let binary = ''
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i])
-  }
-  return btoa(binary)
+function parseJson(text: string) {
+  const cleaned = text.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
+  return JSON.parse(cleaned)
 }
 
-function generateId(): string {
-  return crypto.randomUUID()
+function recalcTotals(estimate: { lineItems: Array<{subtotal: number}>; taxRate: number; subtotal?: number; taxAmount?: number; total?: number }) {
+  estimate.subtotal = estimate.lineItems.reduce((s, i) => s + i.subtotal, 0)
+  estimate.taxAmount = estimate.subtotal * ((estimate.taxRate || 0) / 100)
+  estimate.total = estimate.subtotal + estimate.taxAmount
+  return estimate
+}
+
+/**
+ * Transcribe audio using the Anthropic Files API.
+ * Steps: upload the audio file, ask Claude to transcribe it, delete the file.
+ * Falls back gracefully if upload fails (e.g. unsupported format).
+ */
+async function transcribeAudio(client: Anthropic, audioBlob: Blob, mimeType: string): Promise<string> {
+  // Normalize mime type to something the Files API accepts
+  const safeMime = (
+    mimeType.includes('m4a') ? 'audio/mp4' :
+    mimeType.startsWith('audio/') || mimeType.startsWith('video/') ? mimeType :
+    'audio/mpeg'
+  ) as Parameters<typeof client.beta.files.upload>[0]['file'] extends { type?: infer T } ? T : string
+
+  // Upload the audio to the Anthropic Files API
+  const buffer = await audioBlob.arrayBuffer()
+  const file = new File([buffer], 'recording', { type: safeMime })
+
+  let fileId: string
+  try {
+    const uploaded = await (client.beta.files as unknown as {
+      upload: (params: { file: File }) => Promise<{ id: string }>
+    }).upload({ file })
+    fileId = uploaded.id
+  } catch (err) {
+    throw new Error(`Audio upload failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  try {
+    const msg = await client.beta.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'document',
+            source: { type: 'file', file_id: fileId },
+          } as never,
+          {
+            type: 'text',
+            text: 'Please transcribe this audio recording verbatim. Return only the transcription text, nothing else.',
+          },
+        ],
+      }],
+      betas: ['files-api-2025-04-14'],
+    } as never)
+
+    const transcription = (msg as { content: Array<{ type: string; text: string }> })
+      .content.find(b => b.type === 'text')?.text || ''
+    return transcription
+  } finally {
+    // Clean up the uploaded file
+    try {
+      await (client.beta.files as unknown as { delete: (id: string) => Promise<void> }).delete(fileId)
+    } catch {
+      // Non-fatal
+    }
+  }
 }
 
 async function processAudioHandler(request: Request, env: Env, origin: string): Promise<Response> {
   const formData = await request.formData()
   const audioFile = formData.get('audio') as File | null
+  const textInput = formData.get('text') as string | null
 
-  if (!audioFile) {
-    return jsonResponse({ error: 'No audio file provided' }, 400, origin)
+  if (!audioFile && !textInput) {
+    return jsonResponse({ error: 'Provide an audio file or text description' }, 400, origin)
   }
 
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
 
-  // Detect media type
-  const mimeType = audioFile.type || 'audio/mpeg'
-  const validAudioTypes = ['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/webm', 'audio/ogg', 'audio/m4a']
-  const normalizedType = mimeType.includes('m4a') ? 'audio/mp4' :
-                         validAudioTypes.includes(mimeType) ? mimeType : 'audio/mpeg'
-
-  // Audio files from hour-long customer conversations are expected and normal.
-  // The Anthropic API handles large files via base64 encoding in the messages API.
-  // If files exceed limits, consider chunking or using the Files API for uploads.
-  const audioBase64 = await fileToBase64(audioFile)
+  let jobDescription: string
+  if (textInput) {
+    jobDescription = textInput
+  } else {
+    // Transcribe the audio first
+    try {
+      jobDescription = await transcribeAudio(client, audioFile!, audioFile!.type || 'audio/mpeg')
+    } catch (err) {
+      return jsonResponse({
+        error: `Transcription failed: ${err instanceof Error ? err.message : String(err)}`,
+      }, 500, origin)
+    }
+  }
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 8192,
     system: ESTIMATE_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'document',
-            source: {
-              type: 'base64',
-              media_type: normalizedType as 'audio/mpeg' | 'audio/mp4' | 'audio/wav' | 'audio/webm' | 'audio/ogg',
-              data: audioBase64,
-            },
-          } as never,
-          {
-            type: 'text',
-            text: 'Please analyze this audio recording and generate a complete electrical estimate in JSON format.',
-          },
-        ],
-      },
-    ],
+    messages: [{
+      role: 'user',
+      content: `Generate a complete electrical estimate for this job description:\n\n${jobDescription}`,
+    }],
   })
 
   const responseText = message.content[0].type === 'text' ? message.content[0].text : ''
 
-  // Strip any markdown code fences if Claude wrapped the JSON
-  const jsonText = responseText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
-
   let estimate
   try {
-    estimate = JSON.parse(jsonText)
-    // Ensure required fields
-    if (!estimate.id) estimate.id = generateId()
+    estimate = parseJson(responseText)
+    if (!estimate.id) estimate.id = crypto.randomUUID()
     if (!estimate.createdAt) estimate.createdAt = new Date().toISOString()
     if (!estimate.revisionHistory) estimate.revisionHistory = []
-    if (!estimate.taxRate) estimate.taxRate = 0
-    if (!estimate.taxAmount) estimate.taxAmount = 0
-    // Recalculate totals to be safe
-    estimate.subtotal = estimate.lineItems.reduce((sum: number, item: {subtotal: number}) => sum + item.subtotal, 0)
-    estimate.taxAmount = estimate.subtotal * (estimate.taxRate / 100)
-    estimate.total = estimate.subtotal + estimate.taxAmount
+    recalcTotals(estimate)
   } catch {
     return jsonResponse({ error: 'Failed to parse estimate from AI', raw: responseText }, 500, origin)
   }
@@ -183,81 +220,64 @@ async function processAudioHandler(request: Request, env: Env, origin: string): 
 async function reviseEstimateHandler(request: Request, env: Env, origin: string): Promise<Response> {
   const formData = await request.formData()
   const audioFile = formData.get('audio') as File | Blob | null
+  const textInput = formData.get('text') as string | null
   const estimateJson = formData.get('estimate') as string | null
 
-  if (!audioFile || !estimateJson) {
-    return jsonResponse({ error: 'Missing audio or estimate' }, 400, origin)
+  if ((!audioFile && !textInput) || !estimateJson) {
+    return jsonResponse({ error: 'Missing revision (audio or text) and/or estimate' }, 400, origin)
   }
 
   let currentEstimate
-  try {
-    currentEstimate = JSON.parse(estimateJson)
-  } catch {
+  try { currentEstimate = JSON.parse(estimateJson) } catch {
     return jsonResponse({ error: 'Invalid estimate JSON' }, 400, origin)
   }
 
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
 
-  const audioBase64 = await fileToBase64(audioFile)
-  const mimeType = (audioFile as File).type || 'audio/webm'
-  const normalizedType = mimeType.includes('m4a') ? 'audio/mp4' :
-                         mimeType || 'audio/webm'
+  let revisionText: string
+  if (textInput) {
+    revisionText = textInput
+  } else {
+    try {
+      const mimeType = (audioFile as File).type || 'audio/webm'
+      revisionText = await transcribeAudio(client, audioFile!, mimeType)
+    } catch (err) {
+      return jsonResponse({
+        error: `Transcription failed: ${err instanceof Error ? err.message : String(err)}`,
+      }, 500, origin)
+    }
+  }
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 8192,
     system: REVISION_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'document',
-            source: {
-              type: 'base64',
-              media_type: normalizedType as 'audio/mpeg' | 'audio/mp4' | 'audio/wav' | 'audio/webm' | 'audio/ogg',
-              data: audioBase64,
-            },
-          } as never,
-          {
-            type: 'text',
-            text: `Here is the current estimate:\n\n${JSON.stringify(currentEstimate, null, 2)}\n\nPlease apply all changes described in the revision audio and return the updated estimate with a changesApplied summary.`,
-          },
-        ],
-      },
-    ],
+    messages: [{
+      role: 'user',
+      content: `Current estimate:\n${JSON.stringify(currentEstimate, null, 2)}\n\nRevision instructions:\n${revisionText}`,
+    }],
   })
 
   const responseText = message.content[0].type === 'text' ? message.content[0].text : ''
-  const jsonText = responseText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
 
   let result
-  try {
-    result = JSON.parse(jsonText)
-  } catch {
+  try { result = parseJson(responseText) } catch {
     return jsonResponse({ error: 'Failed to parse revision from AI', raw: responseText }, 500, origin)
   }
 
   const updatedEstimate = result.estimate || result
   const changesApplied: string[] = result.changesApplied || []
 
-  // Add this revision to the history
   updatedEstimate.revisionHistory = [
     ...(currentEstimate.revisionHistory || []),
     {
-      id: generateId(),
+      id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
-      audioTranscript: '[revision audio]',
+      audioTranscript: revisionText,
       changesApplied,
     },
   ]
-
-  // Recalculate totals
-  updatedEstimate.subtotal = updatedEstimate.lineItems.reduce(
-    (sum: number, item: {subtotal: number}) => sum + item.subtotal, 0
-  )
-  updatedEstimate.taxAmount = updatedEstimate.subtotal * ((updatedEstimate.taxRate || 0) / 100)
-  updatedEstimate.total = updatedEstimate.subtotal + updatedEstimate.taxAmount
+  recalcTotals(updatedEstimate)
 
   return jsonResponse(updatedEstimate, 200, origin)
 }
@@ -267,33 +287,22 @@ export default {
     const url = new URL(request.url)
     const origin = env.ALLOWED_ORIGIN || '*'
 
-    // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders(origin) })
     }
-
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405 })
     }
 
     try {
-      if (url.pathname === '/api/process-audio') {
-        return await processAudioHandler(request, env, origin)
-      }
-
-      if (url.pathname === '/api/revise-estimate') {
-        return await reviseEstimateHandler(request, env, origin)
-      }
-
+      if (url.pathname === '/api/process-audio') return processAudioHandler(request, env, origin)
+      if (url.pathname === '/api/revise-estimate') return reviseEstimateHandler(request, env, origin)
       if (url.pathname === '/api/submit-estimate') {
-        // Placeholder — HCP integration goes here
         return jsonResponse({ success: true, message: 'Estimate received (HCP not yet wired)' }, 200, origin)
       }
-
       return jsonResponse({ error: 'Not found' }, 404, origin)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      return jsonResponse({ error: message }, 500, origin)
+      return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, 500, origin)
     }
   },
 }

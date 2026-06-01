@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 interface RevisionRecorderProps {
   onRevisionReady: (audio: Blob) => void
+  onRevisionText: (text: string) => void
   onCancel: () => void
   isProcessing: boolean
 }
@@ -11,10 +12,15 @@ function formatTime(s: number) {
   return `${m}:${(s % 60).toString().padStart(2, '0')}`
 }
 
-export function RevisionRecorder({ onRevisionReady, onCancel, isProcessing }: RevisionRecorderProps) {
-  const [state, setState] = useState<'idle' | 'recording' | 'recorded'>('idle')
+type Tab = 'audio' | 'text'
+type RecordState = 'idle' | 'recording' | 'recorded'
+
+export function RevisionRecorder({ onRevisionReady, onRevisionText, onCancel, isProcessing }: RevisionRecorderProps) {
+  const [tab, setTab] = useState<Tab>('audio')
+  const [recordState, setRecordState] = useState<RecordState>('idle')
   const [seconds, setSeconds] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [revisionText, setRevisionText] = useState('')
 
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -35,11 +41,9 @@ export function RevisionRecorder({ onRevisionReady, onCancel, isProcessing }: Re
     const canvas = canvasRef.current
     const analyser = analyserRef.current
     if (!canvas || !analyser) return
-
     const ctx = canvas.getContext('2d')!
     const bufferLength = analyser.frequencyBinCount
     const dataArray = new Uint8Array(bufferLength)
-
     const c = canvas
     const a = analyser
     function draw() {
@@ -83,11 +87,11 @@ export function RevisionRecorder({ onRevisionReady, onCancel, isProcessing }: Re
         audioCtx.close()
         cancelAnimationFrame(animFrameRef.current)
         blobRef.current = new Blob(chunksRef.current, { type: 'audio/webm' })
-        setState('recorded')
+        setRecordState('recorded')
       }
       recorder.start(250)
       recorderRef.current = recorder
-      setState('recording')
+      setRecordState('recording')
       setSeconds(0)
       timerRef.current = setInterval(() => setSeconds(s => s + 1), 1000)
       setTimeout(drawWaveform, 100)
@@ -100,10 +104,6 @@ export function RevisionRecorder({ onRevisionReady, onCancel, isProcessing }: Re
     recorderRef.current?.stop()
     recorderRef.current = null
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
-  }
-
-  function submitRevision() {
-    if (blobRef.current) onRevisionReady(blobRef.current)
   }
 
   if (isProcessing) {
@@ -119,36 +119,64 @@ export function RevisionRecorder({ onRevisionReady, onCancel, isProcessing }: Re
     <div className="revision-panel">
       <div className="revision-header">
         <h3>Record a revision</h3>
-        <p className="revision-hint">
-          Talk through what needs to change — hours, materials, new tasks, anything.
-        </p>
+        <p className="revision-hint">Describe what needs to change — hours, materials, new tasks, anything.</p>
+      </div>
+
+      <div className="tab-bar tab-bar-sm">
+        <button className={`tab-btn ${tab === 'audio' ? 'active' : ''}`} onClick={() => setTab('audio')}>
+          🎙 Voice
+        </button>
+        <button className={`tab-btn ${tab === 'text' ? 'active' : ''}`} onClick={() => setTab('text')}>
+          ✏️ Type
+        </button>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
 
-      {state === 'idle' && (
-        <button className="btn-record-large" onClick={startRecording}>
-          🎙 Start recording
-        </button>
+      {tab === 'audio' && (
+        <>
+          {recordState === 'idle' && (
+            <button className="btn-record-large" onClick={startRecording}>🎙 Start recording</button>
+          )}
+          {recordState === 'recording' && (
+            <div className="recording-ui">
+              <canvas ref={canvasRef} className="waveform-canvas" width={320} height={60} />
+              <div className="recording-timer">{formatTime(seconds)}</div>
+              <button className="btn-stop-large" onClick={stopRecording}>■ Stop recording</button>
+            </div>
+          )}
+          {recordState === 'recorded' && (
+            <div className="recorded-ui">
+              <div className="recorded-check">✓ {formatTime(seconds)} recorded</div>
+              <div className="recorded-actions">
+                <button className="btn-primary" onClick={() => blobRef.current && onRevisionReady(blobRef.current)}>
+                  Apply revision
+                </button>
+                <button className="btn-ghost" onClick={() => { setRecordState('idle'); setSeconds(0) }}>
+                  Re-record
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
-      {state === 'recording' && (
-        <div className="recording-ui">
-          <canvas ref={canvasRef} className="waveform-canvas" width={320} height={60} />
-          <div className="recording-timer">{formatTime(seconds)}</div>
-          <button className="btn-stop-large" onClick={stopRecording}>
-            ■ Stop recording
+      {tab === 'text' && (
+        <div className="revision-text-section">
+          <textarea
+            className="job-textarea"
+            placeholder={'e.g. "Change the panel labor to 6 hours instead of 4. Add a 50-amp circuit for the hot tub."'}
+            value={revisionText}
+            onChange={(e) => setRevisionText(e.target.value)}
+            rows={5}
+          />
+          <button
+            className="btn-primary"
+            disabled={revisionText.trim().length < 5}
+            onClick={() => onRevisionText(revisionText.trim())}
+          >
+            Apply revision
           </button>
-        </div>
-      )}
-
-      {state === 'recorded' && (
-        <div className="recorded-ui">
-          <div className="recorded-check">✓ {formatTime(seconds)} recorded</div>
-          <div className="recorded-actions">
-            <button className="btn-primary" onClick={submitRevision}>Apply revision</button>
-            <button className="btn-ghost" onClick={() => { setState('idle'); setSeconds(0) }}>Re-record</button>
-          </div>
         </div>
       )}
 

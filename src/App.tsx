@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Estimate } from './types/estimate'
-import { processAudio, reviseEstimate } from './services/anthropicWorker'
+import { processAudio, processText, reviseEstimate, reviseEstimateText } from './services/anthropicWorker'
 import { AudioUpload } from './components/AudioUpload'
 import { EstimateReview } from './components/EstimateReview'
 import { FinalizedEstimate } from './components/FinalizedEstimate'
@@ -8,7 +8,6 @@ import { StepperNav } from './components/StepperNav'
 import './App.css'
 
 type Step = 'upload' | 'review' | 'finalize'
-
 const STEP_INDEX: Record<Step, number> = { upload: 0, review: 1, finalize: 3 }
 
 type ProcessingState =
@@ -16,10 +15,16 @@ type ProcessingState =
   | { type: 'processing'; message: string }
   | { type: 'error'; message: string }
 
-const PROCESSING_MESSAGES = [
+const AUDIO_MESSAGES = [
   'Transcribing recording…',
   'Identifying tasks and materials…',
   'Matching supplier prices…',
+  'Building your estimate…',
+]
+
+const TEXT_MESSAGES = [
+  'Analyzing job description…',
+  'Identifying tasks and materials…',
   'Building your estimate…',
 ]
 
@@ -30,17 +35,15 @@ export default function App() {
   const [isRevising, setIsRevising] = useState(false)
   const [electricianName, setElectricianName] = useState('Your Name')
 
-  async function handleFileReady(file: File) {
-    setProcState({ type: 'processing', message: PROCESSING_MESSAGES[0] })
+  async function runWithProgress(fn: () => Promise<Estimate>, messages: string[]) {
+    setProcState({ type: 'processing', message: messages[0] })
     let idx = 0
-
     const interval = setInterval(() => {
-      idx = (idx + 1) % PROCESSING_MESSAGES.length
-      setProcState({ type: 'processing', message: PROCESSING_MESSAGES[idx] })
+      idx = (idx + 1) % messages.length
+      setProcState({ type: 'processing', message: messages[idx] })
     }, 4000)
-
     try {
-      const result = await processAudio(file)
+      const result = await fn()
       setEstimate(result)
       setStep('review')
       setProcState({ type: 'idle' })
@@ -51,11 +54,30 @@ export default function App() {
     }
   }
 
+  const handleFileReady = (file: File) =>
+    runWithProgress(() => processAudio(file), AUDIO_MESSAGES)
+
+  const handleTextReady = (text: string) =>
+    runWithProgress(() => processText(text), TEXT_MESSAGES)
+
   async function handleRevisionAudio(audio: Blob) {
     if (!estimate) return
     setIsRevising(true)
     try {
       const updated = await reviseEstimate(audio, estimate)
+      setEstimate(updated)
+    } catch (err) {
+      alert(`Revision failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    } finally {
+      setIsRevising(false)
+    }
+  }
+
+  async function handleRevisionText(text: string) {
+    if (!estimate) return
+    setIsRevising(true)
+    try {
+      const updated = await reviseEstimateText(text, estimate)
       setEstimate(updated)
     } catch (err) {
       alert(`Revision failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
@@ -73,7 +95,6 @@ export default function App() {
   return (
     <div className="app">
       <StepperNav currentStep={STEP_INDEX[step]} />
-
       <main className="main-content">
         {step === 'upload' && (
           <>
@@ -92,7 +113,7 @@ export default function App() {
               </div>
             )}
             {procState.type === 'idle' && (
-              <AudioUpload onFileReady={handleFileReady} />
+              <AudioUpload onFileReady={handleFileReady} onTextReady={handleTextReady} />
             )}
           </>
         )}
@@ -102,6 +123,7 @@ export default function App() {
             estimate={estimate}
             onEstimateChange={setEstimate}
             onRevisionAudio={handleRevisionAudio}
+            onRevisionText={handleRevisionText}
             onFinalize={() => setStep('finalize')}
             isRevising={isRevising}
           />
