@@ -3,19 +3,16 @@ main = "src/worker/index.ts"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Local dev — run `wrangler dev` to start the worker on port 8787
+# Local dev: run `wrangler dev` alongside `vite dev`
 [dev]
 port = 8787
 
-# Secrets — set these with `wrangler secret put ANTHROPIC_API_KEY`, etc.
-# Never commit actual values here.
-# Required now:
-#   ANTHROPIC_API_KEY
-#   ALLOWED_ORIGIN (e.g. https://electrician-estimate.pages.dev)
-# Future:
-#   HCP_API_KEY
-#   SUPPLIER_API_KEY
-
-[[routes]]
-pattern = "/api/*"
-zone_name = ""
+# ─── Secrets ───────────────────────────────────────────────────────────────────
+# Set each with: wrangler secret put SECRET_NAME
+# Or for local dev, add to .dev.vars (gitignored)
+#
+#   ANTHROPIC_API_KEY   — Claude API key
+#   OPENAI_API_KEY      — OpenAI key for Whisper transcription
+#   HCP_API_KEY         — HouseCall Pro API key
+#   ACCESS_CODE         — PIN for the front-end access gate (leave unset to disable gate)
+#   ALLOWED_ORIGIN      — your Pages URL, e.g. https://estimate.clarity-ai-consulting.com

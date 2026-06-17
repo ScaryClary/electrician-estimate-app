@@ -22,6 +22,7 @@ export interface Estimate {
   id: string
   createdAt: string
   audioSummary: string
+  scopeOfWork?: string
   customerNotes: string
   jobTitle: string
   lineItems: LineItem[]

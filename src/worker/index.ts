@@ -1,36 +1,49 @@
 /**
  * Cloudflare Worker — all backend logic lives here.
- * Secrets configured via wrangler secret put or .dev.vars (local only):
- *   - ANTHROPIC_API_KEY  (required)
- *   - ALLOWED_ORIGIN     (e.g. https://your-pages-domain.pages.dev, or * for dev)
+ * Secrets set via `wrangler secret put` or `.dev.vars` (local only):
+ *   ANTHROPIC_API_KEY   (required)
+ *   OPENAI_API_KEY      (required for Whisper transcription)
+ *   HCP_API_KEY         (required for HouseCall Pro)
+ *   ACCESS_CODE         (optional — if set, PIN gate is enforced)
+ *   ALLOWED_ORIGIN      (e.g. https://estimate.clarity-ai-consulting.com, or * for dev)
  */
 
 import Anthropic from '@anthropic-ai/sdk'
 
 interface Env {
   ANTHROPIC_API_KEY: string
+  OPENAI_API_KEY: string
+  HCP_API_KEY: string
+  ACCESS_CODE: string
   ALLOWED_ORIGIN: string
 }
+
+// ─── Default prompts (mirror src/services/settings.ts) ───────────────────────
 
 const ESTIMATE_SYSTEM_PROMPT = `You are an expert electrician's assistant. Given a description of electrical work (either a transcript or a plain text description), generate a detailed, professional estimate.
 
 Steps:
-1. Identify all distinct job tasks mentioned (e.g. "replace panel", "run circuit to garage", "install GFCI outlets")
+1. Identify all distinct job tasks mentioned
 2. For each task, create labor line items: description, estimated hours, $95/hr rate, subtotal
-3. For each task, infer ALL materials a real electrician would need. Think carefully:
-   - "run a 20-amp circuit 50 feet to the garage" → 12AWG Romex (55ft with waste), 20A breaker, single-gang box, wire nuts, staples, connector fittings, etc.
-   - Include realistic quantities and current market prices
+3. For each task, infer ALL materials a real electrician would need with realistic quantities and current market prices
 4. Set confidence: "high" for standard items, "medium" if quantity is uncertain, "low" if you're inferring without clear signal
 5. Flag any items needing the electrician's review (unusual scope, missing info, etc.)
-6. Write a 3-5 sentence audioSummary of the job scope
-7. Extract customerNotes: anything specific the customer requested
+6. Write a short 2-3 sentence audioSummary (for internal reference)
+7. Extract customerNotes: anything specific the customer requested or mentioned
 8. Create a short descriptive jobTitle
+9. Write a professional scopeOfWork — this is the customer-facing document. Format it as plain text with clearly labeled sections:
+   - One section per major task (section header on its own line, description paragraph below)
+   - End with a "Notes, Contingencies & Exclusions" section listing assumptions, access requirements, what is/isn't included, and any conditions that could affect pricing
+   - Write professionally in second/third person. Be specific about what work is being done and how.
+   - Example section format: "Panel Upgrade\\nWe will install a new 200A main breaker panel, replace the meter base, install all new breakers..."
+   - The contingencies section should cover things like: existing wiring condition assumptions, surface vs. concealed routing, permit requirements if applicable, what happens if walls need to be opened, customer-supplied vs. contractor-supplied materials
 
 Return ONLY valid JSON (no markdown, no explanation):
 {
   "id": "use crypto.randomUUID()",
   "createdAt": "ISO8601 timestamp",
   "audioSummary": "string",
+  "scopeOfWork": "string — full professional scope with sections and contingencies, newlines as \\n",
   "customerNotes": "string",
   "jobTitle": "string",
   "lineItems": [
@@ -79,11 +92,13 @@ Return ONLY valid JSON (no markdown):
   "changesApplied": ["Changed labor hours on panel replacement: 4 → 6 hrs", "Added: 50A sub-panel disconnect"]
 }`
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
 function corsHeaders(origin: string): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': origin || '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   }
 }
 
@@ -99,91 +114,72 @@ function parseJson(text: string) {
   return JSON.parse(cleaned)
 }
 
-function recalcTotals(estimate: { lineItems: Array<{subtotal: number}>; taxRate: number; subtotal?: number; taxAmount?: number; total?: number }) {
+function recalcTotals(estimate: {
+  lineItems: Array<{ subtotal: number }>
+  taxRate: number
+  subtotal?: number
+  taxAmount?: number
+  total?: number
+}) {
   estimate.subtotal = estimate.lineItems.reduce((s, i) => s + i.subtotal, 0)
   estimate.taxAmount = estimate.subtotal * ((estimate.taxRate || 0) / 100)
   estimate.total = estimate.subtotal + estimate.taxAmount
   return estimate
 }
 
-/**
- * Transcribe audio using the Anthropic Files API.
- * Steps: upload the audio file, ask Claude to transcribe it, delete the file.
- * Falls back gracefully if upload fails (e.g. unsupported format).
- */
-async function transcribeAudio(client: Anthropic, audioBlob: Blob, mimeType: string): Promise<string> {
-  // Normalize mime type to something the Files API accepts
-  const safeMime = (
-    mimeType.includes('m4a') ? 'audio/mp4' :
-    mimeType.startsWith('audio/') || mimeType.startsWith('video/') ? mimeType :
-    'audio/mpeg'
-  ) as Parameters<typeof client.beta.files.upload>[0]['file'] extends { type?: infer T } ? T : string
+// ─── OpenAI Whisper transcription ────────────────────────────────────────────
 
-  // Upload the audio to the Anthropic Files API
-  const buffer = await audioBlob.arrayBuffer()
-  const file = new File([buffer], 'recording', { type: safeMime })
+async function transcribeWithWhisper(audioBlob: Blob, mimeType: string, openaiApiKey: string): Promise<string> {
+  const ext = (mimeType.includes('mp4') || mimeType.includes('m4a')) ? 'm4a' : 'webm'
+  const form = new FormData()
+  form.append('file', audioBlob, `recording.${ext}`)
+  form.append('model', 'whisper-1')
 
-  let fileId: string
-  try {
-    const uploaded = await (client.beta.files as unknown as {
-      upload: (params: { file: File }) => Promise<{ id: string }>
-    }).upload({ file })
-    fileId = uploaded.id
-  } catch (err) {
-    throw new Error(`Audio upload failed: ${err instanceof Error ? err.message : String(err)}`)
+  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${openaiApiKey}` },
+    body: form,
+  })
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText)
+    throw new Error(`Whisper error ${res.status}: ${text}`)
   }
 
-  try {
-    const msg = await client.beta.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'document',
-            source: { type: 'file', file_id: fileId },
-          } as never,
-          {
-            type: 'text',
-            text: 'Please transcribe this audio recording verbatim. Return only the transcription text, nothing else.',
-          },
-        ],
-      }],
-      betas: ['files-api-2025-04-14'],
-    } as never)
-
-    const transcription = (msg as { content: Array<{ type: string; text: string }> })
-      .content.find(b => b.type === 'text')?.text || ''
-    return transcription
-  } finally {
-    // Clean up the uploaded file
-    try {
-      await (client.beta.files as unknown as { delete: (id: string) => Promise<void> }).delete(fileId)
-    } catch {
-      // Non-fatal
-    }
-  }
+  const data = await res.json() as { text: string }
+  return data.text ?? ''
 }
 
-async function processAudioHandler(request: Request, env: Env, origin: string): Promise<Response> {
+// ─── Route handlers ───────────────────────────────────────────────────────────
+
+async function handleAuth(request: Request, env: Env, origin: string): Promise<Response> {
+  if (!env.ACCESS_CODE) return jsonResponse({ valid: true }, 200, origin)
+  const body = await request.json() as { code?: string }
+  return jsonResponse({ valid: body.code === env.ACCESS_CODE }, 200, origin)
+}
+
+async function handleProcessAudio(request: Request, env: Env, origin: string): Promise<Response> {
   const formData = await request.formData()
   const audioFile = formData.get('audio') as File | null
   const textInput = formData.get('text') as string | null
+  const customPrompt = formData.get('estimatePrompt') as string | null
+  const pricingNotes = formData.get('pricingNotes') as string | null
+  const jobNotes = formData.get('jobNotes') as string | null
+  const pricingList = formData.get('pricingList') as string | null
 
   if (!audioFile && !textInput) {
     return jsonResponse({ error: 'Provide an audio file or text description' }, 400, origin)
   }
 
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
-
   let jobDescription: string
   if (textInput) {
     jobDescription = textInput
   } else {
-    // Transcribe the audio first
+    if (!env.OPENAI_API_KEY) {
+      return jsonResponse({ error: 'OPENAI_API_KEY not configured in Worker secrets' }, 500, origin)
+    }
     try {
-      jobDescription = await transcribeAudio(client, audioFile!, audioFile!.type || 'audio/mpeg')
+      jobDescription = await transcribeWithWhisper(audioFile!, audioFile!.type || 'audio/webm', env.OPENAI_API_KEY)
     } catch (err) {
       return jsonResponse({
         error: `Transcription failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -191,10 +187,16 @@ async function processAudioHandler(request: Request, env: Env, origin: string): 
     }
   }
 
+  let systemPrompt = customPrompt || ESTIMATE_SYSTEM_PROMPT
+  if (jobNotes?.trim()) systemPrompt += `\n\nJob & task notes from the electrician:\n${jobNotes.trim()}`
+  if (pricingList?.trim()) systemPrompt += `\n\nPricing reference / price list:\n${pricingList.trim()}`
+  if (pricingNotes?.trim()) systemPrompt += `\n\nAdditional pricing context:\n${pricingNotes.trim()}`
+
+  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 8192,
-    system: ESTIMATE_SYSTEM_PROMPT,
+    system: systemPrompt,
     messages: [{
       role: 'user',
       content: `Generate a complete electrical estimate for this job description:\n\n${jobDescription}`,
@@ -202,7 +204,6 @@ async function processAudioHandler(request: Request, env: Env, origin: string): 
   })
 
   const responseText = message.content[0].type === 'text' ? message.content[0].text : ''
-
   let estimate
   try {
     estimate = parseJson(responseText)
@@ -217,11 +218,12 @@ async function processAudioHandler(request: Request, env: Env, origin: string): 
   return jsonResponse(estimate, 200, origin)
 }
 
-async function reviseEstimateHandler(request: Request, env: Env, origin: string): Promise<Response> {
+async function handleReviseEstimate(request: Request, env: Env, origin: string): Promise<Response> {
   const formData = await request.formData()
-  const audioFile = formData.get('audio') as File | Blob | null
+  const audioFile = formData.get('audio') as File | null
   const textInput = formData.get('text') as string | null
   const estimateJson = formData.get('estimate') as string | null
+  const customRevisionPrompt = formData.get('revisionPrompt') as string | null
 
   if ((!audioFile && !textInput) || !estimateJson) {
     return jsonResponse({ error: 'Missing revision (audio or text) and/or estimate' }, 400, origin)
@@ -232,15 +234,15 @@ async function reviseEstimateHandler(request: Request, env: Env, origin: string)
     return jsonResponse({ error: 'Invalid estimate JSON' }, 400, origin)
   }
 
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
-
   let revisionText: string
   if (textInput) {
     revisionText = textInput
   } else {
+    if (!env.OPENAI_API_KEY) {
+      return jsonResponse({ error: 'OPENAI_API_KEY not configured in Worker secrets' }, 500, origin)
+    }
     try {
-      const mimeType = (audioFile as File).type || 'audio/webm'
-      revisionText = await transcribeAudio(client, audioFile!, mimeType)
+      revisionText = await transcribeWithWhisper(audioFile!, audioFile!.type || 'audio/webm', env.OPENAI_API_KEY)
     } catch (err) {
       return jsonResponse({
         error: `Transcription failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -248,10 +250,11 @@ async function reviseEstimateHandler(request: Request, env: Env, origin: string)
     }
   }
 
+  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 8192,
-    system: REVISION_SYSTEM_PROMPT,
+    system: customRevisionPrompt || REVISION_SYSTEM_PROMPT,
     messages: [{
       role: 'user',
       content: `Current estimate:\n${JSON.stringify(currentEstimate, null, 2)}\n\nRevision instructions:\n${revisionText}`,
@@ -259,7 +262,6 @@ async function reviseEstimateHandler(request: Request, env: Env, origin: string)
   })
 
   const responseText = message.content[0].type === 'text' ? message.content[0].text : ''
-
   let result
   try { result = parseJson(responseText) } catch {
     return jsonResponse({ error: 'Failed to parse revision from AI', raw: responseText }, 500, origin)
@@ -278,9 +280,36 @@ async function reviseEstimateHandler(request: Request, env: Env, origin: string)
     },
   ]
   recalcTotals(updatedEstimate)
-
   return jsonResponse(updatedEstimate, 200, origin)
 }
+
+async function handleHcpProxy(request: Request, env: Env, origin: string, hcpPath: string): Promise<Response> {
+  if (!env.HCP_API_KEY) {
+    return jsonResponse({ error: 'HCP_API_KEY not configured in Worker secrets' }, 500, origin)
+  }
+
+  const url = new URL(request.url)
+  const hcpUrl = `https://api.housecallpro.com${hcpPath}${url.search}`
+
+  const proxyReq = new Request(hcpUrl, {
+    method: request.method,
+    headers: {
+      Authorization: `Token ${env.HCP_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
+  })
+
+  const hcpRes = await fetch(proxyReq)
+  const body = await hcpRes.text()
+
+  return new Response(body, {
+    status: hcpRes.status,
+    headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
+  })
+}
+
+// ─── Main fetch handler ───────────────────────────────────────────────────────
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -290,18 +319,24 @@ export default {
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders(origin) })
     }
+
+    // HCP proxy — pass through any HTTP method
+    if (url.pathname.startsWith('/api/hcp/')) {
+      const hcpPath = url.pathname.replace('/api/hcp', '')
+      return handleHcpProxy(request, env, origin, hcpPath)
+    }
+
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405 })
     }
 
     try {
-      if (url.pathname === '/api/process-audio') return processAudioHandler(request, env, origin)
-      if (url.pathname === '/api/revise-estimate') return reviseEstimateHandler(request, env, origin)
-      if (url.pathname === '/api/submit-estimate') {
-        return jsonResponse({ success: true, message: 'Estimate received (HCP not yet wired)' }, 200, origin)
-      }
+      if (url.pathname === '/api/auth') return handleAuth(request, env, origin)
+      if (url.pathname === '/api/process-audio') return handleProcessAudio(request, env, origin)
+      if (url.pathname === '/api/revise-estimate') return handleReviseEstimate(request, env, origin)
       return jsonResponse({ error: 'Not found' }, 404, origin)
     } catch (err) {
+      console.error('[Worker] Unhandled error:', err)
       return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, 500, origin)
     }
   },

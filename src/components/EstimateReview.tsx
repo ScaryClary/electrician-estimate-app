@@ -21,9 +21,14 @@ export function EstimateReview({
   isRevising,
 }: EstimateReviewProps) {
   const [showRevisionPanel, setShowRevisionPanel] = useState(false)
-  const [customerNotesExpanded, setCustomerNotesExpanded] = useState(false)
-  const [flaggedDismissed, setFlaggedDismissed] = useState(false)
   const [lastChanges, setLastChanges] = useState<string[]>([])
+  const [editingTitle, setEditingTitle] = useState(false)
+
+  function recalc(items: LineItem[], taxRate: number) {
+    const subtotal = items.reduce((s, i) => s + i.subtotal, 0)
+    const taxAmount = subtotal * (taxRate / 100)
+    return { subtotal, taxAmount, total: subtotal + taxAmount }
+  }
 
   function updateLineItem(id: string, field: keyof LineItem, value: string | number | boolean) {
     const updated = estimate.lineItems.map((item) => {
@@ -34,9 +39,29 @@ export function EstimateReview({
       }
       return next
     })
-    const subtotal = updated.reduce((sum, i) => sum + i.subtotal, 0)
-    const taxAmount = subtotal * (estimate.taxRate / 100)
-    onEstimateChange({ ...estimate, lineItems: updated, subtotal, taxAmount, total: subtotal + taxAmount })
+    onEstimateChange({ ...estimate, lineItems: updated, ...recalc(updated, estimate.taxRate) })
+  }
+
+  function deleteLineItem(id: string) {
+    const updated = estimate.lineItems.filter(i => i.id !== id)
+    onEstimateChange({ ...estimate, lineItems: updated, ...recalc(updated, estimate.taxRate) })
+  }
+
+  function addLineItem(type: 'labor' | 'material') {
+    const newItem: LineItem = {
+      id: crypto.randomUUID(),
+      type,
+      description: '',
+      quantity: type === 'labor' ? 1 : 1,
+      unit: type === 'labor' ? 'hrs' : 'ea',
+      unitPrice: type === 'labor' ? 95 : 0,
+      subtotal: 0,
+      priceSource: 'needs_review',
+      confidence: 'low',
+      flagged: false,
+    }
+    const updated = [...estimate.lineItems, newItem]
+    onEstimateChange({ ...estimate, lineItems: updated, ...recalc(updated, estimate.taxRate) })
   }
 
   function updateTaxRate(rate: number) {
@@ -47,80 +72,131 @@ export function EstimateReview({
   async function handleRevisionReady(audio: Blob) {
     setShowRevisionPanel(false)
     await onRevisionAudio(audio)
-    showLastChanges()
+    const latest = estimate.revisionHistory[estimate.revisionHistory.length - 1]
+    if (latest) setLastChanges(latest.changesApplied)
   }
 
   async function handleRevisionText(text: string) {
     setShowRevisionPanel(false)
     await onRevisionText(text)
-    showLastChanges()
-  }
-
-  function showLastChanges() {
     const latest = estimate.revisionHistory[estimate.revisionHistory.length - 1]
     if (latest) setLastChanges(latest.changesApplied)
   }
 
   const flaggedCount = estimate.lineItems.filter(i => i.flagged).length
-  const canFinalize = flaggedDismissed || flaggedCount === 0
 
   return (
-    <div className="estimate-review">
-      <div className="estimate-header">
-        <h2 className="job-title">{estimate.jobTitle}</h2>
-        <p className="audio-summary">{estimate.audioSummary}</p>
-      </div>
-
-      {estimate.customerNotes && (
-        <div className="customer-notes-card">
-          <button className="collapsible-header" onClick={() => setCustomerNotesExpanded(x => !x)}>
-            <span>Customer notes</span>
-            <span>{customerNotesExpanded ? '▲' : '▼'}</span>
-          </button>
-          {customerNotesExpanded && <p className="customer-notes-body">{estimate.customerNotes}</p>}
-        </div>
-      )}
-
-      {lastChanges.length > 0 && (
-        <div className="changelog-card">
-          <strong>Last revision applied:</strong>
-          <ul>{lastChanges.map((c, i) => <li key={i}>{c}</li>)}</ul>
-        </div>
-      )}
-
-      <LineItemTable items={estimate.lineItems} onUpdate={updateLineItem} />
-
-      <div className="totals-section">
-        <div className="total-row"><span>Subtotal</span><span>${estimate.subtotal.toFixed(2)}</span></div>
-        <div className="total-row">
-          <span>Tax rate (%)</span>
-          <input
-            className="tax-input"
-            type="number"
-            min="0"
-            step="0.1"
-            value={estimate.taxRate}
-            onChange={(e) => updateTaxRate(parseFloat(e.target.value) || 0)}
+    <div className={`estimate-review-layout ${showRevisionPanel ? 'has-revision-panel' : ''}`}>
+      {/* Main estimate column */}
+      <div className="estimate-main">
+        {/* Header — editable */}
+        <div className="estimate-header">
+          {editingTitle ? (
+            <input
+              className="item-input job-title-input"
+              value={estimate.jobTitle}
+              autoFocus
+              onChange={(e) => onEstimateChange({ ...estimate, jobTitle: e.target.value })}
+              onBlur={() => setEditingTitle(false)}
+              onKeyDown={(e) => e.key === 'Enter' && setEditingTitle(false)}
+            />
+          ) : (
+            <h2 className="job-title editable-field" onClick={() => setEditingTitle(true)} title="Tap to edit">
+              {estimate.jobTitle || 'Untitled job'}
+            </h2>
+          )}
+          <textarea
+            className="summary-textarea"
+            value={estimate.audioSummary}
+            onChange={(e) => onEstimateChange({ ...estimate, audioSummary: e.target.value })}
+            rows={3}
           />
         </div>
-        <div className="total-row"><span>Tax</span><span>${estimate.taxAmount.toFixed(2)}</span></div>
-        <div className="total-row total-final"><span>Total</span><span>${estimate.total.toFixed(2)}</span></div>
+
+        {/* Revision loading banner */}
+        {isRevising && (
+          <div className="revision-loading-banner">
+            <div className="spinner-sm" />
+            <span>Applying your revision…</span>
+          </div>
+        )}
+
+        {/* Last changes applied */}
+        {lastChanges.length > 0 && !isRevising && (
+          <div className="changelog-card">
+            <strong>Revision applied:</strong>
+            <ul>{lastChanges.map((c, i) => <li key={i}>{c}</li>)}</ul>
+            <button className="btn-ghost" style={{ fontSize: 12, padding: '4px 0' }} onClick={() => setLastChanges([])}>Dismiss</button>
+          </div>
+        )}
+
+        {/* Customer notes */}
+        {estimate.customerNotes && (
+          <div className="customer-notes-card">
+            <p className="customer-notes-label">Customer notes</p>
+            <textarea
+              className="summary-textarea"
+              value={estimate.customerNotes}
+              onChange={(e) => onEstimateChange({ ...estimate, customerNotes: e.target.value })}
+              rows={2}
+            />
+          </div>
+        )}
+
+        {/* Line items */}
+        <LineItemTable
+          items={estimate.lineItems}
+          onUpdate={updateLineItem}
+          onDelete={deleteLineItem}
+          onAdd={addLineItem}
+        />
+
+        {/* Totals */}
+        <div className="totals-section">
+          <div className="total-row"><span>Subtotal</span><span>${estimate.subtotal.toFixed(2)}</span></div>
+          <div className="total-row">
+            <span>Tax rate (%)</span>
+            <input
+              className="tax-input"
+              type="number"
+              min="0"
+              step="0.1"
+              value={estimate.taxRate}
+              onChange={(e) => updateTaxRate(parseFloat(e.target.value) || 0)}
+            />
+          </div>
+          {estimate.taxRate > 0 && (
+            <div className="total-row"><span>Tax</span><span>${estimate.taxAmount.toFixed(2)}</span></div>
+          )}
+          <div className="total-row total-final"><span>Total</span><span>${estimate.total.toFixed(2)}</span></div>
+        </div>
+
+        {/* Flagged items — informational only, does not block finalize */}
+        {estimate.flaggedItems.length > 0 && (
+          <div className="flagged-section">
+            <h4>⚠ {flaggedCount} item{flaggedCount !== 1 ? 's' : ''} may need attention</h4>
+            <ul>{estimate.flaggedItems.map((item, i) => <li key={i}>{item}</li>)}</ul>
+          </div>
+        )}
+
+        {/* Bottom action bar */}
+        <div className="estimate-action-bar">
+          <button
+            className={`btn-primary ${showRevisionPanel ? 'btn-active' : ''}`}
+            onClick={() => setShowRevisionPanel(p => !p)}
+            disabled={isRevising}
+          >
+            {showRevisionPanel ? '✕ Close revision' : '🎙 Revise'}
+          </button>
+          <button className="btn-secondary" onClick={onFinalize}>
+            Finalize →
+          </button>
+        </div>
       </div>
 
-      {estimate.flaggedItems.length > 0 && (
-        <div className="flagged-section">
-          <h4>⚠️ Items needing attention</h4>
-          <ul>{estimate.flaggedItems.map((item, i) => <li key={i}>{item}</li>)}</ul>
-          {!flaggedDismissed && (
-            <button className="btn-ghost" onClick={() => setFlaggedDismissed(true)}>
-              Dismiss and proceed
-            </button>
-          )}
-        </div>
-      )}
-
+      {/* Revision side panel — no overlay, no darkening */}
       {showRevisionPanel && (
-        <div className="revision-overlay">
+        <div className="revision-sidebar">
           <RevisionRecorder
             onRevisionReady={handleRevisionReady}
             onRevisionText={handleRevisionText}
@@ -129,23 +205,6 @@ export function EstimateReview({
           />
         </div>
       )}
-
-      <div className="sticky-footer">
-        <button
-          className="btn-primary"
-          onClick={() => setShowRevisionPanel(true)}
-          disabled={isRevising}
-        >
-          🎙 Record revision
-        </button>
-        <button
-          className={`btn-secondary ${!canFinalize ? 'btn-disabled' : ''}`}
-          onClick={canFinalize ? onFinalize : undefined}
-          title={!canFinalize ? 'Dismiss flagged items first' : undefined}
-        >
-          Finalize estimate
-        </button>
-      </div>
     </div>
   )
 }

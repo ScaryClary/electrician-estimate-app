@@ -1,8 +1,10 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect } from 'react'
 
 interface AudioUploadProps {
   onFileReady: (file: File) => void
   onTextReady: (text: string) => void
+  hasApiKey: boolean
+  onOpenSettings: () => void
 }
 
 const ACCEPTED_TYPES = '.m4a,.mp3,.wav,.mp4,.ogg,.webm,.aac,.flac'
@@ -11,7 +13,7 @@ const ACCEPTED_MIME = [
   'audio/aac', 'audio/flac', 'video/mp4', 'audio/x-m4a',
 ]
 
-const EXAMPLE_JOB = `Replace the 100-amp main panel with a new 200-amp panel. Run two new 20-amp circuits about 40 feet to the garage. Install GFCI outlets in both bathrooms and the kitchen. Customer also wants a dedicated 30-amp circuit for a hot tub on the back patio, about 60 feet from the panel.`
+const EXAMPLE_JOB = `Customer wants to install a Tesla charger. They already have the charger — just need to run the wiring. Room in the panel for a breaker. Add a 30-amp breaker and run about 100 feet of wire from the panel to the garage.`
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60)
@@ -19,22 +21,28 @@ function formatDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-type Tab = 'upload' | 'text'
+const hasSpeechRecognition = typeof window !== 'undefined' &&
+  ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
 
-export function AudioUpload({ onFileReady, onTextReady }: AudioUploadProps) {
-  const [tab, setTab] = useState<Tab>('upload')
+export function AudioUpload({ onFileReady, onTextReady, hasApiKey, onOpenSettings }: AudioUploadProps) {
+  const [jobText, setJobText] = useState('')        // unified — recording appends here, user can edit freely
+  const [interimText, setInterimText] = useState('') // shown below textarea during recording, not in textarea
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [duration, setDuration] = useState<number | null>(null)
   const [dragOver, setDragOver] = useState(false)
-  const [isRecording, setIsRecording] = useState(false)
-  const [recordingSeconds, setRecordingSeconds] = useState(0)
   const [error, setError] = useState<string | null>(null)
-  const [jobText, setJobText] = useState('')
 
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const chunksRef = useRef<Blob[]>([])
+  const recognitionRef = useRef<InstanceType<typeof SpeechRecognition> | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => () => {
+    recognitionRef.current?.stop()
+    if (timerRef.current) clearInterval(timerRef.current)
+  }, [])
 
   function handleFile(file: File) {
     setError(null)
@@ -60,153 +68,180 @@ export function AudioUpload({ onFileReady, onTextReady }: AudioUploadProps) {
     if (file) handleFile(file)
   }
 
-  async function startRecording() {
+  function startRecording() {
     setError(null)
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const recorder = new MediaRecorder(stream)
-      chunksRef.current = []
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
-      recorder.onstop = () => {
-        stream.getTracks().forEach(t => t.stop())
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
-        const file = new File([blob], `recording-${Date.now()}.webm`, { type: 'audio/webm' })
-        setSelectedFile(file)
-        setDuration(recordingSeconds)
-      }
-      recorder.start(250)
-      mediaRecorderRef.current = recorder
-      setIsRecording(true)
-      setRecordingSeconds(0)
-      timerRef.current = setInterval(() => setRecordingSeconds(s => s + 1), 1000)
-    } catch {
-      setError('Microphone access denied. Please allow microphone access and try again.')
+    const SR = (window as typeof window & { SpeechRecognition?: typeof SpeechRecognition; webkitSpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition
+      || (window as typeof window & { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition
+    if (!SR) {
+      setError('Live recording requires Chrome on Android, Mac, or Windows. Type your job description below instead.')
+      return
     }
+
+    const recognition = new SR()
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.lang = 'en-US'
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let finalPart = ''
+      let interimPart = ''
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript
+        if (event.results[i].isFinal) finalPart += t + ' '
+        else interimPart += t
+      }
+      if (finalPart) {
+        // Append confirmed words to the editable textarea
+        setJobText(prev => {
+          const spacer = prev && !prev.endsWith(' ') ? ' ' : ''
+          return prev + spacer + finalPart
+        })
+      }
+      setInterimText(interimPart)
+    }
+
+    recognition.onerror = (e: SpeechRecognitionErrorEvent) => {
+      if (e.error !== 'aborted') setError(`Mic error: ${e.error}`)
+      stopRecording()
+    }
+
+    recognition.onend = () => {
+      setInterimText('')
+      // Restart automatically while recording is still active
+      if (recognitionRef.current) recognition.start()
+    }
+
+    recognition.start()
+    recognitionRef.current = recognition
+    setIsRecording(true)
+    setRecordingSeconds(0)
+    timerRef.current = setInterval(() => setRecordingSeconds(s => s + 1), 1000)
   }
 
   function stopRecording() {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop()
-      mediaRecorderRef.current = null
-    }
-    if (timerRef.current) {
-      clearInterval(timerRef.current)
-      timerRef.current = null
-    }
+    const r = recognitionRef.current
+    recognitionRef.current = null
+    r?.stop()
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
     setIsRecording(false)
+    setInterimText('')
   }
+
+  if (!hasApiKey) {
+    return (
+      <div className="upload-screen">
+        <div className="upload-hero">
+          <div className="upload-icon">⚡</div>
+          <h1>Electrician Estimate</h1>
+        </div>
+        <div className="api-key-prompt">
+          <div className="api-key-icon">🔑</div>
+          <h3>Add your Anthropic API key to get started</h3>
+          <p>Your key is stored only in your browser — never sent anywhere except directly to Anthropic.</p>
+          <button className="btn-primary" onClick={onOpenSettings}>Open Settings to add API key</button>
+        </div>
+      </div>
+    )
+  }
+
+  const canGenerate = jobText.trim().length >= 10
 
   return (
     <div className="upload-screen">
       <div className="upload-hero">
         <div className="upload-icon">⚡</div>
         <h1>Electrician Estimate</h1>
-        <p className="upload-tagline">Upload a recording or describe the job to generate an instant estimate</p>
-      </div>
-
-      {/* Tab switcher */}
-      <div className="tab-bar">
-        <button
-          className={`tab-btn ${tab === 'upload' ? 'active' : ''}`}
-          onClick={() => { setTab('upload'); setError(null) }}
-        >
-          🎙 Audio / Recording
-        </button>
-        <button
-          className={`tab-btn ${tab === 'text' ? 'active' : ''}`}
-          onClick={() => { setTab('text'); setError(null) }}
-        >
-          ✏️ Type description
-        </button>
+        <p className="upload-tagline">Describe the job — record, type, or upload a recording</p>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
 
-      {tab === 'upload' && (
-        <>
-          <div
-            className={`drop-zone ${dragOver ? 'drag-over' : ''} ${selectedFile ? 'has-file' : ''}`}
-            onClick={() => !selectedFile && fileInputRef.current?.click()}
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={handleDrop}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={ACCEPTED_TYPES}
-              style={{ display: 'none' }}
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }}
-            />
-            {selectedFile ? (
-              <div className="file-info">
-                <div className="file-icon">🎙️</div>
-                <div className="file-name">{selectedFile.name}</div>
-                {duration !== null && <div className="file-duration">{formatDuration(duration)}</div>}
-                <button className="btn-ghost" onClick={(e) => { e.stopPropagation(); setSelectedFile(null); setDuration(null) }}>
-                  Choose different file
-                </button>
-              </div>
-            ) : (
-              <div className="drop-prompt">
-                <div className="drop-icon">📁</div>
-                <p><strong>Tap to choose a file</strong> or drag and drop</p>
-                <p className="drop-hint">m4a, mp3, wav, mp4, ogg — any voice memo format</p>
-              </div>
-            )}
+      {/* Upload a file */}
+      <div
+        className={`drop-zone drop-zone-compact ${dragOver ? 'drag-over' : ''} ${selectedFile ? 'has-file' : ''}`}
+        onClick={() => !selectedFile && fileInputRef.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={ACCEPTED_TYPES}
+          style={{ display: 'none' }}
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }}
+        />
+        {selectedFile ? (
+          <div className="file-info-compact">
+            <span className="file-icon-sm">🎙️</span>
+            <span className="file-name">{selectedFile.name}</span>
+            {duration !== null && <span className="file-duration">{formatDuration(duration)}</span>}
+            <button className="btn-ghost file-clear-btn" onClick={(e) => { e.stopPropagation(); setSelectedFile(null); setDuration(null) }}>✕</button>
           </div>
+        ) : (
+          <div className="drop-prompt-compact">
+            <span className="drop-icon-sm">📁</span>
+            <span><strong>Upload a recording</strong> — tap or drag &amp; drop</span>
+            <span className="drop-hint">m4a, mp3, wav, mp4, ogg</span>
+          </div>
+        )}
+      </div>
 
-          {!selectedFile && (
-            <div className="record-section">
-              <div className="record-divider"><span>or record directly</span></div>
+      {selectedFile && (
+        <button className="btn-primary btn-process" onClick={() => onFileReady(selectedFile)}>
+          Transcribe &amp; generate estimate →
+        </button>
+      )}
+
+      {/* Job description textarea — shared between typing and recording */}
+      {!selectedFile && (
+        <div className="job-input-section">
+          <div className="job-input-header">
+            <label className="job-input-label">Job description</label>
+            <div className="record-inline-controls">
               {isRecording ? (
-                <div className="recording-active">
-                  <div className="pulse-ring" />
-                  <button className="btn-record-stop" onClick={stopRecording}>
-                    ■ Stop ({formatDuration(recordingSeconds)})
-                  </button>
-                </div>
+                <button className="btn-record-inline active" onClick={stopRecording}>
+                  <span className="record-dot" /> Stop &nbsp;{formatDuration(recordingSeconds)}
+                </button>
               ) : (
-                <button className="btn-record-start" onClick={startRecording}>
-                  🎙 Record voice note
+                <button
+                  className="btn-record-inline"
+                  onClick={startRecording}
+                  disabled={!hasSpeechRecognition}
+                  title={hasSpeechRecognition ? 'Record voice note' : 'Not supported in this browser'}
+                >
+                  🎙 Record
                 </button>
               )}
             </div>
-          )}
+          </div>
 
-          {selectedFile && (
-            <button className="btn-primary btn-process" onClick={() => onFileReady(selectedFile)}>
-              Process recording →
-            </button>
-          )}
-        </>
-      )}
-
-      {tab === 'text' && (
-        <div className="text-input-section">
-          <p className="text-input-hint">
-            Describe the job in plain language — exactly like you'd explain it to a helper.
-          </p>
           <textarea
-            className="job-textarea"
+            ref={textareaRef}
+            className={`job-textarea ${isRecording ? 'textarea-recording' : ''}`}
             placeholder={EXAMPLE_JOB}
             value={jobText}
             onChange={(e) => setJobText(e.target.value)}
-            rows={7}
+            rows={8}
           />
-          <button
-            className="btn-ghost use-example"
-            onClick={() => setJobText(EXAMPLE_JOB)}
-          >
-            Use example job
-          </button>
-          <button
-            className="btn-primary btn-process"
-            disabled={jobText.trim().length < 20}
-            onClick={() => onTextReady(jobText.trim())}
-          >
-            Generate estimate →
-          </button>
+
+          {/* Interim text indicator — shown while recording, not in the textarea */}
+          {interimText && (
+            <p className="interim-indicator">Hearing: <em>{interimText}</em></p>
+          )}
+
+          <div className="job-input-actions">
+            <button className="btn-ghost use-example" onClick={() => setJobText(EXAMPLE_JOB)}>
+              Use example
+            </button>
+            <button
+              className="btn-primary"
+              disabled={!canGenerate || isRecording}
+              onClick={() => onTextReady(jobText.trim())}
+            >
+              {isRecording ? 'Stop recording first' : 'Generate estimate →'}
+            </button>
+          </div>
         </div>
       )}
     </div>
