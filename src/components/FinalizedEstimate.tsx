@@ -12,7 +12,12 @@ interface FinalizedEstimateProps {
   onBack: () => void
 }
 
+const IS_PROD = !import.meta.env.DEV
+
 export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onNameChange, onStartOver, onBack }: FinalizedEstimateProps) {
+  // In production the Worker holds the HCP key — no browser key needed
+  const hcpEnabled = !!hcpApiKey || IS_PROD
+  const hcpKey = hcpApiKey || ''
   const [customerName, setCustomerName] = useState('')
   const [customerAddress, setCustomerAddress] = useState('')
   const [jobSite, setJobSite] = useState('')
@@ -43,14 +48,14 @@ export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onName
   const [createError, setCreateError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!hcpApiKey) return
+    if (!hcpEnabled) return
     setJobsLoading(true)
     setJobsError(null)
-    fetchTodaysSchedule(hcpApiKey)
+    fetchTodaysSchedule(hcpKey)
       .then(jobs => setTodaysJobs(jobs))
       .catch(err => setJobsError(err instanceof Error ? err.message : 'Failed to load schedule'))
       .finally(() => setJobsLoading(false))
-  }, [hcpApiKey])
+  }, [hcpEnabled, hcpKey])
 
   function selectJob(job: HCPJob) {
     setSelectedJob(job)
@@ -89,14 +94,14 @@ export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onName
   function handleCustomerSearchChange(value: string) {
     setCustomerSearch(value)
     if (searchTimer.current) clearTimeout(searchTimer.current)
-    if (!value.trim() || !hcpApiKey) {
+    if (!value.trim() || !hcpEnabled) {
       setSearchResults([])
       return
     }
     searchTimer.current = setTimeout(async () => {
       setSearching(true)
       try {
-        const results = await searchCustomers(value, hcpApiKey)
+        const results = await searchCustomers(value, hcpKey)
         setSearchResults(results)
       } catch {
         setSearchResults([])
@@ -115,11 +120,11 @@ export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onName
   const materialItems = estimate.lineItems.filter(i => i.type === 'material')
 
   async function handleCreateCustomer() {
-    if (!hcpApiKey || !newFirstName.trim()) return
+    if (!hcpEnabled || !newFirstName.trim()) return
     setCreatingCustomer(true)
     setCreateError(null)
     try {
-      const customer = await createCustomer(hcpApiKey, newFirstName.trim(), newLastName.trim())
+      const customer = await createCustomer(hcpKey, newFirstName.trim(), newLastName.trim())
       selectCustomerFromSearch(customer)
       setShowCreateCustomer(false)
       setNewFirstName('')
@@ -132,14 +137,14 @@ export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onName
   }
 
   async function handleSubmit() {
-    if (hcpApiKey && !selectedJob) {
+    if (hcpEnabled && !selectedJob) {
       setSubmitError('Please select or create a customer before submitting.')
       return
     }
     setSubmitting(true)
     setSubmitError(null)
     try {
-      await submitToHCP(estimate, hcpApiKey, selectedJob ?? undefined)
+      await submitToHCP(estimate, hcpKey, selectedJob ?? undefined)
       setSubmitted(true)
       setTimeout(() => onStartOver(), 2000)
     } catch (err) {
@@ -168,7 +173,7 @@ export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onName
       </button>
 
       {/* Today's schedule — only shown when HCP key is configured */}
-      {hcpApiKey && (
+      {hcpEnabled && (
         <div className="hcp-schedule-section">
           <div className="hcp-schedule-header">
             <h3 className="hcp-schedule-title">Today's schedule</h3>
@@ -465,7 +470,7 @@ export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onName
 
       {/* Actions */}
       <div className="doc-actions">
-        {hcpApiKey && !selectedJob && (
+        {hcpEnabled && !selectedJob && (
           <div className="hcp-error hcp-no-customer-warning" style={{ marginBottom: 8 }}>
             No customer selected — search for an existing customer or create a new one above before submitting.
           </div>
@@ -478,7 +483,7 @@ export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onName
         <button
           className="btn-primary btn-submit"
           onClick={handleSubmit}
-          disabled={submitting || (!!hcpApiKey && !selectedJob)}
+          disabled={submitting || (hcpEnabled && !selectedJob)}
         >
           {submitting ? 'Saving…' : selectedJob ? `Submit to HCP — ${[selectedJob.customer.first_name, selectedJob.customer.last_name].join(' ')}` : 'Submit to Housecall Pro'}
         </button>

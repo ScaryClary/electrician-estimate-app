@@ -175,11 +175,13 @@ export async function createCustomer(
 }
 
 export async function submitToHCP(estimate: Estimate, apiKey?: string, selectedJob?: HCPJob): Promise<void> {
-  if (!apiKey || !selectedJob) {
+  // In production the Worker injects the HCP key — apiKey is not required
+  if ((!apiKey && !IS_PROD) || !selectedJob) {
     console.log('[HCP] No API key or selected job — skipping real submission')
     await new Promise((resolve) => setTimeout(resolve, 500))
     return
   }
+  const key = apiKey ?? ''
 
   const services = serviceItemsPayload(estimate)
   const materials = materialItemsPayload(estimate)
@@ -203,7 +205,7 @@ export async function submitToHCP(estimate: Estimate, apiKey?: string, selectedJ
       }],
     }
     if (selectedJob.address?.id) payload.address_id = selectedJob.address.id
-    const created = await hcpFetch(apiKey, '/estimates', {
+    const created = await hcpFetch(key, '/estimates', {
       method: 'POST',
       body: JSON.stringify(payload),
     })
@@ -213,13 +215,13 @@ export async function submitToHCP(estimate: Estimate, apiKey?: string, selectedJ
     // For a Job entry: add services and materials directly to the job
     console.log('[HCP] Adding line items to job…')
     for (const item of services) {
-      await hcpFetch(apiKey, `/jobs/${selectedJob.id}/line_items`, {
+      await hcpFetch(key, `/jobs/${selectedJob.id}/line_items`, {
         method: 'POST',
         body: JSON.stringify(item),
       })
     }
     for (const item of materials) {
-      await hcpFetch(apiKey, `/jobs/${selectedJob.id}/line_items`, {
+      await hcpFetch(key, `/jobs/${selectedJob.id}/line_items`, {
         method: 'POST',
         body: JSON.stringify(item),
       })
