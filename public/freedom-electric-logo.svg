@@ -1,0 +1,65 @@
+<svg viewBox="0 0 220 260" xmlns="http://www.w3.org/2000/svg">
+  <!-- Freedom Electric logo: American flag rendered as lightning bolt streaks -->
+
+  <!-- Blue canton with stars -->
+  <rect x="0" y="0" width="82" height="110" fill="#3C3B6E"/>
+
+  <!-- Stars in canton (5-4-5-4-5 staggered rows) -->
+  <g fill="white" font-size="12" font-family="serif" text-anchor="middle">
+    <!-- Row 1: 5 stars -->
+    <text x="10" y="22">★</text><text x="25" y="22">★</text><text x="40" y="22">★</text><text x="55" y="22">★</text><text x="70" y="22">★</text>
+    <!-- Row 2: 4 stars (offset) -->
+    <text x="17" y="38">★</text><text x="32" y="38">★</text><text x="47" y="38">★</text><text x="62" y="38">★</text>
+    <!-- Row 3: 5 stars -->
+    <text x="10" y="54">★</text><text x="25" y="54">★</text><text x="40" y="54">★</text><text x="55" y="54">★</text><text x="70" y="54">★</text>
+    <!-- Row 4: 4 stars -->
+    <text x="17" y="70">★</text><text x="32" y="70">★</text><text x="47" y="70">★</text><text x="62" y="70">★</text>
+    <!-- Row 5: 5 stars -->
+    <text x="10" y="86">★</text><text x="25" y="86">★</text><text x="40" y="86">★</text><text x="55" y="86">★</text><text x="70" y="86">★</text>
+    <!-- Row 6: 4 stars -->
+    <text x="17" y="102">★</text><text x="32" y="102">★</text><text x="47" y="102">★</text><text x="62" y="102">★</text>
+  </g>
+
+  <!-- Lightning bolt 1 — leftmost, runs under the canton -->
+  <!-- Points: top-left to bottom, zigzag lightning shape -->
+  <polygon fill="#B22234" points="
+    0,112
+    52,112
+    38,158
+    58,158
+    22,230
+    0,230
+  "/>
+
+  <!-- Lightning bolt 2 — center, full height right of canton -->
+  <polygon fill="#B22234" points="
+    88,0
+    122,0
+    108,80
+    128,80
+    90,180
+    110,180
+    70,260
+    48,260
+    88,160
+    68,160
+    108,60
+    88,60
+  "/>
+
+  <!-- Lightning bolt 3 — rightmost, full height -->
+  <polygon fill="#B22234" points="
+    148,0
+    182,0
+    168,80
+    188,80
+    150,180
+    170,180
+    130,260
+    108,260
+    148,160
+    128,160
+    168,60
+    148,60
+  "/>
+</svg>

@@ -305,12 +305,23 @@ export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onName
 
       {/* Document header */}
       <div className="doc-header">
+        <div className="doc-company-row">
+          <img
+            src={IS_PROD ? '/tools/electrician-estimate/freedom-electric-logo.svg' : '/freedom-electric-logo.svg'}
+            alt="Freedom Electric"
+            className="doc-company-logo"
+          />
+          <div>
+            <div className="doc-company-name">Freedom Electric</div>
+            <div className="doc-company-tagline">Licensed · Bonded · Insured</div>
+          </div>
+        </div>
         <h1 className="doc-main-title">Electrical Estimate</h1>
         <div className="doc-meta">
           <span>Date: {new Date(estimate.createdAt).toLocaleDateString()}</span>
           <span> · </span>
           <span>
-            By:{' '}
+            Technician:{' '}
             <input
               className="inline-input"
               value={electricianName}

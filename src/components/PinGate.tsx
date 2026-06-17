@@ -42,8 +42,14 @@ export function PinGate({ children }: { children: React.ReactNode }) {
   return (
     <div className="pin-gate">
       <div className="pin-gate-card">
-        <h2 className="pin-gate-title">Electrician Estimator</h2>
-        <p className="pin-gate-subtitle">Enter the access code to continue</p>
+        <img
+          src="/tools/electrician-estimate/freedom-electric-logo.svg"
+          onError={(e) => { (e.target as HTMLImageElement).src = '/freedom-electric-logo.svg' }}
+          alt="Freedom Electric"
+          className="pin-gate-logo"
+        />
+        <h2 className="pin-gate-title">Freedom Electric</h2>
+        <p className="pin-gate-subtitle">Enter your access code to continue</p>
         <form onSubmit={handleSubmit} className="pin-gate-form">
           <input
             type="password"

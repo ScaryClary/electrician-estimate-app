@@ -1,16 +1,16 @@
 *, *::before, *::after { box-sizing: border-box; }
 
 :root {
-  --bg: #0f1117;
-  --bg-card: #1a1d26;
-  --bg-card2: #21252f;
-  --border: #2d3241;
-  --text: #c8ccd8;
-  --text-dim: #7a8099;
-  --text-h: #edf0f7;
-  --accent: #e8a020;
-  --accent-dim: rgba(232, 160, 32, 0.15);
-  --accent-border: rgba(232, 160, 32, 0.4);
+  --bg: #080d18;
+  --bg-card: #0f1626;
+  --bg-card2: #172033;
+  --border: #1e3050;
+  --text: #c8cfe0;
+  --text-dim: #6b7fa0;
+  --text-h: #eef2ff;
+  --accent: #c8102e;
+  --accent-dim: rgba(200, 16, 46, 0.12);
+  --accent-border: rgba(200, 16, 46, 0.4);
   --green: #22c55e;
   --yellow: #eab308;
   --red: #ef4444;
@@ -30,16 +30,53 @@ body { margin: 0; }
   flex-direction: column;
 }
 
+/* ─── Brand header ─── */
+.brand-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.brand-logo {
+  width: 32px;
+  height: 38px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.brand-name {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+.brand-name-top {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.15em;
+  color: var(--text-h);
+  text-transform: uppercase;
+}
+.brand-name-bottom {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
 /* ─── Stepper ─── */
 .stepper-nav {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px 24px;
+  padding: 12px 24px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   gap: 0;
   position: relative;
+  min-height: 64px;
 }
 .stepper-steps {
   display: flex;
@@ -150,9 +187,17 @@ body { margin: 0; }
 
 /* ─── Upload screen ─── */
 .upload-screen { display: flex; flex-direction: column; gap: 24px; }
-.upload-hero { text-align: center; padding: 32px 0 8px; }
+.upload-hero { text-align: center; padding: 24px 0 8px; }
+.upload-brand-logo {
+  width: 72px;
+  height: 86px;
+  object-fit: contain;
+  margin: 0 auto 12px;
+  display: block;
+  filter: drop-shadow(0 4px 16px rgba(200,16,46,0.3));
+}
 .upload-icon { font-size: 48px; line-height: 1; }
-.upload-hero h1 { margin: 8px 0 0; font-size: 28px; color: var(--text-h); }
+.upload-hero h1 { margin: 0 0 0; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; color: var(--text-h); }
 .upload-tagline { color: var(--text-dim); margin: 8px 0 0; font-size: 15px; }
 
 .drop-zone {
@@ -617,7 +662,35 @@ body { margin: 0; }
   border-radius: 14px;
   padding: 24px;
 }
-.doc-main-title { font-size: 24px; color: var(--text-h); margin: 0 0 6px; }
+.doc-company-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.doc-company-logo {
+  width: 44px;
+  height: 52px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.doc-company-name {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--text-h);
+}
+.doc-company-tagline {
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+.doc-main-title { font-size: 22px; color: var(--text-h); margin: 0 0 6px; }
 .doc-meta { font-size: 13px; color: var(--text-dim); margin-bottom: 10px; }
 .doc-job-title { font-size: 18px; color: var(--accent); margin: 0; }
 .editable-name {
@@ -1341,6 +1414,8 @@ body { margin: 0; }
   .main-content { padding: 16px 12px 40px; }
   .stepper-label { display: none; }
   .stepper-line { width: 24px; }
+  .brand-name { display: none; }
+  .brand-logo { width: 24px; height: 28px; }
 }
 
 /* On narrow screens, revision panel goes to the bottom as a compact drawer (no overlay) */
@@ -1377,11 +1452,19 @@ body { margin: 0; }
 .pin-gate-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 40px 36px;
+  border-radius: 16px;
+  padding: 48px 40px 40px;
   max-width: 360px;
   width: 100%;
   text-align: center;
+  box-shadow: 0 0 60px rgba(200, 16, 46, 0.08), 0 20px 60px rgba(0,0,0,0.5);
+}
+.pin-gate-logo {
+  width: 64px;
+  height: 76px;
+  object-fit: contain;
+  margin: 0 auto 16px;
+  display: block;
 }
 .pin-gate-title {
   font-size: 22px;

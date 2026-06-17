@@ -15,6 +15,10 @@ const ACCEPTED_MIME = [
 
 const EXAMPLE_JOB = `Customer wants to install a Tesla charger. They already have the charger — just need to run the wiring. Room in the panel for a breaker. Add a 30-amp breaker and run about 100 feet of wire from the panel to the garage.`
 
+const LOGO_SRC = import.meta.env.DEV
+  ? '/freedom-electric-logo.svg'
+  : '/tools/electrician-estimate/freedom-electric-logo.svg'
+
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60)
   const s = Math.floor(seconds % 60)
@@ -25,8 +29,8 @@ const hasSpeechRecognition = typeof window !== 'undefined' &&
   ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
 
 export function AudioUpload({ onFileReady, onTextReady, hasApiKey, onOpenSettings }: AudioUploadProps) {
-  const [jobText, setJobText] = useState('')        // unified — recording appends here, user can edit freely
-  const [interimText, setInterimText] = useState('') // shown below textarea during recording, not in textarea
+  const [jobText, setJobText] = useState('')
+  const [interimText, setInterimText] = useState('')
   const [isRecording, setIsRecording] = useState(false)
   const [recordingSeconds, setRecordingSeconds] = useState(0)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -91,7 +95,6 @@ export function AudioUpload({ onFileReady, onTextReady, hasApiKey, onOpenSetting
         else interimPart += t
       }
       if (finalPart) {
-        // Append confirmed words to the editable textarea
         setJobText(prev => {
           const spacer = prev && !prev.endsWith(' ') ? ' ' : ''
           return prev + spacer + finalPart
@@ -107,7 +110,6 @@ export function AudioUpload({ onFileReady, onTextReady, hasApiKey, onOpenSetting
 
     recognition.onend = () => {
       setInterimText('')
-      // Restart automatically while recording is still active
       if (recognitionRef.current) recognition.start()
     }
 
@@ -131,8 +133,8 @@ export function AudioUpload({ onFileReady, onTextReady, hasApiKey, onOpenSetting
     return (
       <div className="upload-screen">
         <div className="upload-hero">
-          <div className="upload-icon">⚡</div>
-          <h1>Electrician Estimate</h1>
+          <img src={LOGO_SRC} alt="Freedom Electric" className="upload-brand-logo" />
+          <h1>Freedom Electric Estimator</h1>
         </div>
         <div className="api-key-prompt">
           <div className="api-key-icon">🔑</div>
@@ -149,8 +151,8 @@ export function AudioUpload({ onFileReady, onTextReady, hasApiKey, onOpenSetting
   return (
     <div className="upload-screen">
       <div className="upload-hero">
-        <div className="upload-icon">⚡</div>
-        <h1>Electrician Estimate</h1>
+        <img src={LOGO_SRC} alt="Freedom Electric" className="upload-brand-logo" />
+        <h1>Freedom Electric Estimator</h1>
         <p className="upload-tagline">Describe the job — record, type, or upload a recording</p>
       </div>
 
@@ -225,7 +227,6 @@ export function AudioUpload({ onFileReady, onTextReady, hasApiKey, onOpenSetting
             rows={8}
           />
 
-          {/* Interim text indicator — shown while recording, not in the textarea */}
           {interimText && (
             <p className="interim-indicator">Hearing: <em>{interimText}</em></p>
           )}
