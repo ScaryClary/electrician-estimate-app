@@ -23,9 +23,9 @@ interface Env {
 const ESTIMATE_SYSTEM_PROMPT = `You are an expert electrician's assistant. Given a description of electrical work (either a transcript or a plain text description), generate a detailed, professional estimate.
 
 Steps:
-1. Identify all distinct job tasks mentioned
-2. For each task, create labor line items: description, estimated hours, $95/hr rate, subtotal
-3. For each task, infer ALL materials a real electrician would need with realistic quantities and current market prices
+1. Identify the distinct PROJECTS at the worksite. A project is a whole installation, e.g. "Install Tesla charger" or "Install generator". A single worksite may have multiple projects — keep them as separate groups, but understand they are part of the same estimate.
+2. For EACH project, create exactly ONE labor line item. The description is the concise project name (e.g. "Install Tesla charger", "Install generator") — NOT a breakdown of sub-steps. Do NOT split labor into "run cable", "install breaker", "connect wire", etc. The quantity is the TOTAL hours for the entire project at $95/hr. Set jobGroup to that same project name.
+3. For each project, infer ALL materials a real electrician would need with realistic quantities and current market prices. Each material is its own line item, and its jobGroup MUST match the project name from its labor line so materials stay linked to the right project.
 4. Set confidence: "high" for standard items, "medium" if quantity is uncertain, "low" if you're inferring without clear signal
 5. Flag any items needing the electrician's review (unusual scope, missing info, etc.)
 6. Write a short 2-3 sentence audioSummary (for internal reference)
@@ -50,7 +50,8 @@ Return ONLY valid JSON (no markdown, no explanation):
     {
       "id": "unique string",
       "type": "labor",
-      "description": "string",
+      "jobGroup": "project name, e.g. Install Tesla charger",
+      "description": "concise project name (same as jobGroup)",
       "quantity": number,
       "unit": "hrs",
       "unitPrice": 95,
@@ -60,6 +61,7 @@ Return ONLY valid JSON (no markdown, no explanation):
     {
       "id": "unique string",
       "type": "material",
+      "jobGroup": "project name this material belongs to (must match a labor line's jobGroup)",
       "description": "string",
       "quantity": number,
       "unit": "ea|ft|box|roll|bag|pk",
@@ -160,14 +162,14 @@ async function handleAuth(request: Request, env: Env, origin: string): Promise<R
 
 async function handleProcessAudio(request: Request, env: Env, origin: string): Promise<Response> {
   const formData = await request.formData()
-  const audioFile = formData.get('audio') as File | null
+  const audioFiles = formData.getAll('audio').filter((a): a is File => a instanceof File)
   const textInput = formData.get('text') as string | null
   const customPrompt = formData.get('estimatePrompt') as string | null
   const pricingNotes = formData.get('pricingNotes') as string | null
   const jobNotes = formData.get('jobNotes') as string | null
   const pricingList = formData.get('pricingList') as string | null
 
-  if (!audioFile && !textInput) {
+  if (audioFiles.length === 0 && !textInput) {
     return jsonResponse({ error: 'Provide an audio file or text description' }, 400, origin)
   }
 
@@ -179,7 +181,13 @@ async function handleProcessAudio(request: Request, env: Env, origin: string): P
       return jsonResponse({ error: 'OPENAI_API_KEY not configured in Worker secrets' }, 500, origin)
     }
     try {
-      jobDescription = await transcribeWithWhisper(audioFile!, audioFile!.type || 'audio/webm', env.OPENAI_API_KEY)
+      const transcripts: string[] = []
+      for (const file of audioFiles) {
+        transcripts.push(await transcribeWithWhisper(file, file.type || 'audio/webm', env.OPENAI_API_KEY))
+      }
+      jobDescription = transcripts
+        .map((t, i) => audioFiles.length > 1 ? `[Recording ${i + 1}]\n${t}` : t)
+        .join('\n\n')
     } catch (err) {
       return jsonResponse({
         error: `Transcription failed: ${err instanceof Error ? err.message : String(err)}`,

@@ -141,7 +141,9 @@ export async function fetchTodaysSchedule(apiKey: string): Promise<HCPJob[]> {
   return results
 }
 
-function toHcpItem(item: Estimate['lineItems'][number]) {
+type EstimateLineItem = Estimate['lineItems'][number]
+
+function toHcpItem(item: EstimateLineItem) {
   return {
     name: item.description || (item.type === 'labor' ? 'Labor' : 'Material'),
     description: item.description,
@@ -154,27 +156,92 @@ function toHcpItem(item: Estimate['lineItems'][number]) {
   }
 }
 
+/** The job/project an item belongs to. Falls back to a single bucket if untagged. */
+function groupKey(item: EstimateLineItem): string {
+  return (item.jobGroup && item.jobGroup.trim()) || 'Project'
+}
+
+// One labor line per project — already produced that way by the AI, sent as-is.
 function serviceItemsPayload(estimate: Estimate) {
   return estimate.lineItems.filter(i => i.type === 'labor').map(toHcpItem)
 }
 
+/**
+ * One lump-sum material line per project. HCP shows e.g. "Tesla charger install
+ * materials" with the project's total material cost — NOT every screw and wire.
+ * The itemized breakdown goes into the notes instead (see materialsBreakdownNote).
+ */
 function materialItemsPayload(estimate: Estimate) {
-  return estimate.lineItems.filter(i => i.type === 'material').map(toHcpItem)
+  const materials = estimate.lineItems.filter(i => i.type === 'material')
+  const groups = new Map<string, number>()
+  for (const m of materials) {
+    groups.set(groupKey(m), (groups.get(groupKey(m)) ?? 0) + m.subtotal)
+  }
+  return Array.from(groups.entries()).map(([job, total]) => ({
+    name: `${job} — materials`,
+    description: `Materials for ${job} (itemized in notes)`,
+    quantity: 1,
+    unit_price: Math.round(total * 100),
+    unit_cost: 0,
+    taxable: true,
+  }))
+}
+
+/** Itemized per-project materials list for the HCP private/customer notes. */
+function materialsBreakdownNote(estimate: Estimate): string {
+  const materials = estimate.lineItems.filter(i => i.type === 'material')
+  if (materials.length === 0) return ''
+  const groups = new Map<string, EstimateLineItem[]>()
+  for (const m of materials) {
+    const k = groupKey(m)
+    if (!groups.has(k)) groups.set(k, [])
+    groups.get(k)!.push(m)
+  }
+  const sections: string[] = ['MATERIALS BREAKDOWN']
+  for (const [job, items] of groups) {
+    const total = items.reduce((s, i) => s + i.subtotal, 0)
+    sections.push(`\n${job} — materials ($${total.toFixed(2)}):`)
+    for (const i of items) {
+      sections.push(`  • ${i.description} — ${i.quantity} ${i.unit} @ $${i.unitPrice.toFixed(2)} = $${i.subtotal.toFixed(2)}`)
+    }
+  }
+  return sections.join('\n')
+}
+
+export interface NewCustomerInput {
+  firstName: string
+  lastName: string
+  phone?: string
 }
 
 export async function createCustomer(
   apiKey: string,
-  firstName: string,
-  lastName: string,
+  input: NewCustomerInput,
 ): Promise<HCPCustomer> {
+  const body: Record<string, unknown> = {
+    first_name: input.firstName,
+    last_name: input.lastName,
+  }
+  if (input.phone?.trim()) body.mobile_number = input.phone.trim()
   const data = await hcpFetch(apiKey, '/customers', {
     method: 'POST',
-    body: JSON.stringify({ first_name: firstName, last_name: lastName }),
+    body: JSON.stringify(body),
   })
   return data.customer ?? data
 }
 
-export async function submitToHCP(estimate: Estimate, apiKey?: string, selectedJob?: HCPJob): Promise<void> {
+/** Optional appointment for a new estimate/job. */
+export interface HCPSchedule {
+  start: string // ISO8601
+  end: string   // ISO8601
+}
+
+export async function submitToHCP(
+  estimate: Estimate,
+  apiKey?: string,
+  selectedJob?: HCPJob,
+  schedule?: HCPSchedule | null,
+): Promise<void> {
   // In production the Worker injects the HCP key — apiKey is not required
   if ((!apiKey && !IS_PROD) || !selectedJob) {
     console.log('[HCP] No API key or selected job — skipping real submission')
@@ -185,15 +252,37 @@ export async function submitToHCP(estimate: Estimate, apiKey?: string, selectedJ
 
   const services = serviceItemsPayload(estimate)
   const materials = materialItemsPayload(estimate)
+  const breakdown = materialsBreakdownNote(estimate)
   const noteLines = [
     estimate.scopeOfWork || estimate.audioSummary || estimate.jobTitle,
     estimate.customerNotes?.trim() ? `Customer notes: ${estimate.customerNotes.trim()}` : '',
+    breakdown,
   ].filter(Boolean)
   const note = noteLines.join('\n\n')
 
-  console.log('[HCP] Submitting', services.length, 'service + ', materials.length, 'material items to', selectedJob._entryType, selectedJob.id)
+  console.log('[HCP] Submitting', services.length, 'service + ', materials.length, 'material lines to', selectedJob._entryType, selectedJob.id)
 
-  if (selectedJob._entryType === 'Estimate') {
+  // New customer/estimate WITH an appointment → create a scheduled Job instead.
+  if (selectedJob._entryType === 'Estimate' && schedule) {
+    console.log('[HCP] Creating scheduled job for customer', selectedJob.customer.id)
+    const jobPayload: Record<string, unknown> = {
+      customer_id: selectedJob.customer.id,
+      line_items: [...services, ...materials],
+      note,
+      schedule: {
+        scheduled_start: schedule.start,
+        scheduled_end: schedule.end,
+        arrival_window: 0,
+      },
+    }
+    if (selectedJob.address?.id) jobPayload.address_id = selectedJob.address.id
+    const createdJob = await hcpFetch(key, '/jobs', {
+      method: 'POST',
+      body: JSON.stringify(jobPayload),
+    })
+    console.log('[HCP] Created scheduled job:', JSON.stringify(createdJob, null, 2))
+
+  } else if (selectedJob._entryType === 'Estimate') {
     console.log('[HCP] Creating new estimate for customer', selectedJob.customer.id)
     const payload: Record<string, unknown> = {
       customer_id: selectedJob.customer.id,
@@ -225,6 +314,13 @@ export async function submitToHCP(estimate: Estimate, apiKey?: string, selectedJ
         method: 'POST',
         body: JSON.stringify(item),
       })
+    }
+    // Save the itemized materials breakdown + scope onto the job's note.
+    if (note.trim()) {
+      await hcpFetch(key, `/jobs/${selectedJob.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ note }),
+      }).catch(err => console.warn('[HCP] Could not update job note:', err))
     }
   }
 

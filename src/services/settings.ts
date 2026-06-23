@@ -16,9 +16,9 @@ const STORAGE_KEY = 'electrician_estimate_settings_v1'
 export const DEFAULT_ESTIMATE_PROMPT = `You are an expert electrician's assistant. Given a description of electrical work (either a transcript or a plain text description), generate a detailed, professional estimate.
 
 Steps:
-1. Identify all distinct job tasks mentioned
-2. For each task, create labor line items: description, estimated hours, {{LABOR_RATE}}/hr rate, subtotal
-3. For each task, infer ALL materials a real electrician would need with realistic quantities and current market prices
+1. Identify the distinct PROJECTS at the worksite. A project is a whole installation, e.g. "Install Tesla charger" or "Install generator". A single worksite may have multiple projects — keep them as separate groups, but understand they are part of the same estimate.
+2. For EACH project, create exactly ONE labor line item. The description is the concise project name (e.g. "Install Tesla charger", "Install generator") — NOT a breakdown of sub-steps. Do NOT split labor into "run cable", "install breaker", "connect wire", etc. The quantity is the TOTAL hours for the entire project at {{LABOR_RATE}}/hr. Set jobGroup to that same project name.
+3. For each project, infer ALL materials a real electrician would need with realistic quantities and current market prices. Each material is its own line item, and its jobGroup MUST match the project name from its labor line so materials stay linked to the right project.
 4. Set confidence: "high" for standard items, "medium" if quantity is uncertain, "low" if you're inferring without clear signal
 5. Flag any items needing the electrician's review (unusual scope, missing info, etc.)
 6. Write a short 2-3 sentence audioSummary (for internal reference)
@@ -43,7 +43,8 @@ Return ONLY valid JSON (no markdown, no explanation):
     {
       "id": "unique string",
       "type": "labor",
-      "description": "string",
+      "jobGroup": "project name, e.g. Install Tesla charger",
+      "description": "concise project name (same as jobGroup)",
       "quantity": number,
       "unit": "hrs",
       "unitPrice": {{LABOR_RATE}},
@@ -53,6 +54,7 @@ Return ONLY valid JSON (no markdown, no explanation):
     {
       "id": "unique string",
       "type": "material",
+      "jobGroup": "project name this material belongs to (must match a labor line's jobGroup)",
       "description": "string",
       "quantity": number,
       "unit": "ea|ft|box|roll|bag|pk",
@@ -99,11 +101,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
 }
 
 export function loadSettings(): AppSettings {
-  const envDefaults = {
-    apiKey: (import.meta.env.VITE_ANTHROPIC_API_KEY as string) || '',
-    hcpApiKey: (import.meta.env.VITE_HCP_API_KEY as string) || '',
-    openAiApiKey: (import.meta.env.VITE_OPENAI_API_KEY as string) || '',
-  }
+  // SECURITY: only read VITE_* keys in dev. In production these must NEVER be
+  // referenced — Vite inlines env values into the shipped JS bundle, which would
+  // expose the keys to anyone who opens the site. Production keys live only in
+  // the Cloudflare Worker secrets. The `import.meta.env.DEV` guard is statically
+  // replaced with `false` at build time, so the VITE_* values are dropped from
+  // the production bundle entirely.
+  const envDefaults = import.meta.env.DEV
+    ? {
+        apiKey: (import.meta.env.VITE_ANTHROPIC_API_KEY as string) || '',
+        hcpApiKey: (import.meta.env.VITE_HCP_API_KEY as string) || '',
+        openAiApiKey: (import.meta.env.VITE_OPENAI_API_KEY as string) || '',
+      }
+    : { apiKey: '', hcpApiKey: '', openAiApiKey: '' }
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     const stored = raw ? JSON.parse(raw) : {}

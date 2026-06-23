@@ -71,8 +71,8 @@ export default function App() {
     }
   }
 
-  const handleFileReady = (file: File) =>
-    runWithProgress(() => processAudio(file, settings), AUDIO_MESSAGES)
+  const handleFilesReady = (files: File[]) =>
+    runWithProgress(() => processAudio(files, settings), AUDIO_MESSAGES)
 
   const handleTextReady = (text: string) =>
     runWithProgress(() => processText(text, settings), TEXT_MESSAGES)
@@ -140,9 +140,9 @@ export default function App() {
             )}
             {procState.type === 'idle' && (
               <AudioUpload
-                onFileReady={handleFileReady}
+                onFilesReady={handleFilesReady}
                 onTextReady={handleTextReady}
-                hasApiKey={!!settings.apiKey}
+                hasApiKey={import.meta.env.DEV ? !!settings.apiKey : true}
                 onOpenSettings={() => openSettings(true)}
               />
             )}

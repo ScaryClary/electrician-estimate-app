@@ -116,15 +116,24 @@ function buildEstimateForm(settings: AppSettings, extra: Record<string, string |
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export async function processAudio(file: File, settings: AppSettings): Promise<Estimate> {
+export async function processAudio(files: File[], settings: AppSettings): Promise<Estimate> {
   if (IS_PROD) {
-    return workerFetch('/api/process-audio', buildEstimateForm(settings, { audio: file }))
+    const form = buildEstimateForm(settings)
+    for (const file of files) form.append('audio', file)
+    return workerFetch('/api/process-audio', form)
   }
   const client = getClient(settings.apiKey)
-  const transcript = settings.openAiApiKey
-    ? await transcribeWithWhisper(file, settings.openAiApiKey)
-    : await transcribeAudio(client, file, file.type || 'audio/mpeg')
-  return generateEstimate(client, transcript, settings)
+  const transcripts: string[] = []
+  for (const file of files) {
+    const t = settings.openAiApiKey
+      ? await transcribeWithWhisper(file, settings.openAiApiKey)
+      : await transcribeAudio(client, file, file.type || 'audio/mpeg')
+    transcripts.push(t)
+  }
+  const combined = transcripts
+    .map((t, i) => files.length > 1 ? `[Recording ${i + 1}]\n${t}` : t)
+    .join('\n\n')
+  return generateEstimate(client, combined, settings)
 }
 
 export async function processText(description: string, settings: AppSettings): Promise<Estimate> {

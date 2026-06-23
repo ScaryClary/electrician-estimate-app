@@ -11,8 +11,11 @@ interface SettingsProps {
 
 type SettingsTab = 'api' | 'notes' | 'pricing' | 'estimate'
 
+// In production the Cloudflare Worker holds all API keys — never show/store them in the browser.
+const SHOW_API_KEYS = import.meta.env.DEV
+
 export function Settings({ settings, onSave, onClose, openToApiKey }: SettingsProps) {
-  const [tab, setTab] = useState<SettingsTab>(openToApiKey ? 'api' : 'notes')
+  const [tab, setTab] = useState<SettingsTab>(openToApiKey && SHOW_API_KEYS ? 'api' : 'notes')
   const [showKey, setShowKey] = useState(false)
   const [showHcpKey, setShowHcpKey] = useState(false)
   const [showOpenAiKey, setShowOpenAiKey] = useState(false)
@@ -49,9 +52,11 @@ export function Settings({ settings, onSave, onClose, openToApiKey }: SettingsPr
         </div>
 
         <div className="tab-bar settings-tabs">
-          <button className={`tab-btn ${tab === 'api' ? 'active' : ''}`} onClick={() => setTab('api')}>
-            API Keys
-          </button>
+          {SHOW_API_KEYS && (
+            <button className={`tab-btn ${tab === 'api' ? 'active' : ''}`} onClick={() => setTab('api')}>
+              API Keys
+            </button>
+          )}
           <button className={`tab-btn ${tab === 'notes' ? 'active' : ''}`} onClick={() => setTab('notes')}>
             Job Notes
           </button>
@@ -64,7 +69,7 @@ export function Settings({ settings, onSave, onClose, openToApiKey }: SettingsPr
         </div>
 
         <div className="settings-body">
-          {tab === 'api' && (
+          {tab === 'api' && SHOW_API_KEYS && (
             <div className="settings-section">
               <div className="api-key-info">
                 <p className="settings-field-hint">

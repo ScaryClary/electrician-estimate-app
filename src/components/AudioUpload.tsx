@@ -1,10 +1,15 @@
 import { useRef, useState, useEffect } from 'react'
 
 interface AudioUploadProps {
-  onFileReady: (file: File) => void
+  onFilesReady: (files: File[]) => void
   onTextReady: (text: string) => void
   hasApiKey: boolean
   onOpenSettings: () => void
+}
+
+interface PickedFile {
+  file: File
+  duration: number | null
 }
 
 const ACCEPTED_TYPES = '.m4a,.mp3,.wav,.mp4,.ogg,.webm,.aac,.flac'
@@ -28,13 +33,12 @@ function formatDuration(seconds: number): string {
 const hasSpeechRecognition = typeof window !== 'undefined' &&
   ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
 
-export function AudioUpload({ onFileReady, onTextReady, hasApiKey, onOpenSettings }: AudioUploadProps) {
+export function AudioUpload({ onFilesReady, onTextReady, hasApiKey, onOpenSettings }: AudioUploadProps) {
   const [jobText, setJobText] = useState('')
   const [interimText, setInterimText] = useState('')
   const [isRecording, setIsRecording] = useState(false)
   const [recordingSeconds, setRecordingSeconds] = useState(0)
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [duration, setDuration] = useState<number | null>(null)
+  const [selectedFiles, setSelectedFiles] = useState<PickedFile[]>([])
   const [dragOver, setDragOver] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -48,28 +52,43 @@ export function AudioUpload({ onFileReady, onTextReady, hasApiKey, onOpenSetting
     if (timerRef.current) clearInterval(timerRef.current)
   }, [])
 
-  function handleFile(file: File) {
+  function addFiles(files: File[]) {
     setError(null)
-    const isValid = ACCEPTED_MIME.some(t => file.type === t) || file.name.match(/\.(m4a|mp3|wav|mp4|ogg|webm|aac|flac)$/i)
-    if (!isValid) {
+    const valid: File[] = []
+    for (const file of files) {
+      const ok = ACCEPTED_MIME.some(t => file.type === t) || file.name.match(/\.(m4a|mp3|wav|mp4|ogg|webm|aac|flac)$/i)
+      if (ok) valid.push(file)
+    }
+    if (valid.length === 0) {
       setError('Unsupported file type. Please upload an audio or video file.')
       return
     }
-    setSelectedFile(file)
-    const url = URL.createObjectURL(file)
-    const audio = new Audio(url)
-    audio.addEventListener('loadedmetadata', () => {
-      if (isFinite(audio.duration)) setDuration(audio.duration)
-      URL.revokeObjectURL(url)
-    })
-    audio.addEventListener('error', () => URL.revokeObjectURL(url))
+    setSelectedFiles(prev => [...prev, ...valid.map(file => ({ file, duration: null }))])
+    // Read durations asynchronously and patch them in
+    for (const file of valid) {
+      const url = URL.createObjectURL(file)
+      const audio = new Audio(url)
+      audio.addEventListener('loadedmetadata', () => {
+        if (isFinite(audio.duration)) {
+          setSelectedFiles(prev => prev.map(p =>
+            p.file === file ? { ...p, duration: audio.duration } : p
+          ))
+        }
+        URL.revokeObjectURL(url)
+      })
+      audio.addEventListener('error', () => URL.revokeObjectURL(url))
+    }
+  }
+
+  function removeFile(target: File) {
+    setSelectedFiles(prev => prev.filter(p => p.file !== target))
   }
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault()
     setDragOver(false)
-    const file = e.dataTransfer.files[0]
-    if (file) handleFile(file)
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length) addFiles(files)
   }
 
   function startRecording() {
@@ -158,10 +177,10 @@ export function AudioUpload({ onFileReady, onTextReady, hasApiKey, onOpenSetting
 
       {error && <div className="error-banner">{error}</div>}
 
-      {/* Upload a file */}
+      {/* Upload files — supports multiple recordings */}
       <div
-        className={`drop-zone drop-zone-compact ${dragOver ? 'drag-over' : ''} ${selectedFile ? 'has-file' : ''}`}
-        onClick={() => !selectedFile && fileInputRef.current?.click()}
+        className={`drop-zone drop-zone-compact ${dragOver ? 'drag-over' : ''} ${selectedFiles.length ? 'has-file' : ''}`}
+        onClick={() => fileInputRef.current?.click()}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
@@ -170,33 +189,38 @@ export function AudioUpload({ onFileReady, onTextReady, hasApiKey, onOpenSetting
           ref={fileInputRef}
           type="file"
           accept={ACCEPTED_TYPES}
+          multiple
           style={{ display: 'none' }}
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }}
+          onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) addFiles(fs); e.target.value = '' }}
         />
-        {selectedFile ? (
-          <div className="file-info-compact">
-            <span className="file-icon-sm">🎙️</span>
-            <span className="file-name">{selectedFile.name}</span>
-            {duration !== null && <span className="file-duration">{formatDuration(duration)}</span>}
-            <button className="btn-ghost file-clear-btn" onClick={(e) => { e.stopPropagation(); setSelectedFile(null); setDuration(null) }}>✕</button>
-          </div>
-        ) : (
-          <div className="drop-prompt-compact">
-            <span className="drop-icon-sm">📁</span>
-            <span><strong>Upload a recording</strong> — tap or drag &amp; drop</span>
-            <span className="drop-hint">m4a, mp3, wav, mp4, ogg</span>
-          </div>
-        )}
+        <div className="drop-prompt-compact">
+          <span className="drop-icon-sm">📁</span>
+          <span><strong>Upload recordings</strong> — tap or drag &amp; drop (add as many as you need)</span>
+          <span className="drop-hint">m4a, mp3, wav, mp4, ogg</span>
+        </div>
       </div>
 
-      {selectedFile && (
-        <button className="btn-primary btn-process" onClick={() => onFileReady(selectedFile)}>
-          Transcribe &amp; generate estimate →
+      {selectedFiles.length > 0 && (
+        <div className="selected-files-list">
+          {selectedFiles.map(({ file, duration }, i) => (
+            <div className="file-info-compact" key={`${file.name}-${i}`}>
+              <span className="file-icon-sm">🎙️</span>
+              <span className="file-name">{file.name}</span>
+              {duration !== null && <span className="file-duration">{formatDuration(duration)}</span>}
+              <button className="btn-ghost file-clear-btn" onClick={() => removeFile(file)}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {selectedFiles.length > 0 && (
+        <button className="btn-primary btn-process" onClick={() => onFilesReady(selectedFiles.map(p => p.file))}>
+          Transcribe &amp; generate estimate{selectedFiles.length > 1 ? ` (${selectedFiles.length} recordings)` : ''} →
         </button>
       )}
 
       {/* Job description textarea — shared between typing and recording */}
-      {!selectedFile && (
+      {selectedFiles.length === 0 && (
         <div className="job-input-section">
           <div className="job-input-header">
             <label className="job-input-label">Job description</label>

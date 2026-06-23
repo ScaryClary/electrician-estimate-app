@@ -44,8 +44,14 @@ export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onName
   const [showCreateCustomer, setShowCreateCustomer] = useState(false)
   const [newFirstName, setNewFirstName] = useState('')
   const [newLastName, setNewLastName] = useState('')
+  const [newPhone, setNewPhone] = useState('')
   const [creatingCustomer, setCreatingCustomer] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+
+  // Appointment for the new estimate: none, or a specific date + time
+  const [apptMode, setApptMode] = useState<'none' | 'specific'>('none')
+  const [apptDate, setApptDate] = useState('')
+  const [apptTime, setApptTime] = useState('')
 
   useEffect(() => {
     if (!hcpEnabled) return
@@ -124,11 +130,16 @@ export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onName
     setCreatingCustomer(true)
     setCreateError(null)
     try {
-      const customer = await createCustomer(hcpKey, newFirstName.trim(), newLastName.trim())
+      const customer = await createCustomer(hcpKey, {
+        firstName: newFirstName.trim(),
+        lastName: newLastName.trim(),
+        phone: newPhone.trim() || undefined,
+      })
       selectCustomerFromSearch(customer)
       setShowCreateCustomer(false)
       setNewFirstName('')
       setNewLastName('')
+      setNewPhone('')
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : 'Failed to create customer')
     } finally {
@@ -144,7 +155,13 @@ export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onName
     setSubmitting(true)
     setSubmitError(null)
     try {
-      await submitToHCP(estimate, hcpKey, selectedJob ?? undefined)
+      let schedule: { start: string; end: string } | null = null
+      if (apptMode === 'specific' && apptDate && apptTime) {
+        const start = new Date(`${apptDate}T${apptTime}`)
+        const end = new Date(start.getTime() + 2 * 60 * 60 * 1000) // default 2-hour window
+        schedule = { start: start.toISOString(), end: end.toISOString() }
+      }
+      await submitToHCP(estimate, hcpKey, selectedJob ?? undefined, schedule)
       setSubmitted(true)
       setTimeout(() => onStartOver(), 2000)
     } catch (err) {
@@ -281,9 +298,56 @@ export function FinalizedEstimate({ estimate, electricianName, hcpApiKey, onName
                     placeholder="Last name"
                     value={newLastName}
                     onChange={(e) => setNewLastName(e.target.value)}
+                  />
+                  <input
+                    className="field-input"
+                    type="tel"
+                    placeholder="Phone number"
+                    value={newPhone}
+                    onChange={(e) => setNewPhone(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleCreateCustomer()}
                   />
                 </div>
+
+                {/* Appointment */}
+                <div className="hcp-appt-section">
+                  <p className="hcp-search-label">Appointment</p>
+                  <label className="hcp-appt-radio">
+                    <input
+                      type="radio"
+                      name="apptMode"
+                      checked={apptMode === 'none'}
+                      onChange={() => setApptMode('none')}
+                    />
+                    No specific appointment yet
+                  </label>
+                  <label className="hcp-appt-radio">
+                    <input
+                      type="radio"
+                      name="apptMode"
+                      checked={apptMode === 'specific'}
+                      onChange={() => setApptMode('specific')}
+                    />
+                    Specific date &amp; time
+                  </label>
+                  {apptMode === 'specific' && (
+                    <div className="hcp-appt-fields">
+                      <input
+                        className="field-input"
+                        type="date"
+                        value={apptDate}
+                        onChange={(e) => setApptDate(e.target.value)}
+                      />
+                      <input
+                        className="field-input"
+                        type="time"
+                        value={apptTime}
+                        onChange={(e) => setApptTime(e.target.value)}
+                      />
+                    </div>
+                  )}
+                </div>
+
                 {createError && <p className="hcp-error" style={{ marginTop: 6 }}>{createError}</p>}
                 <div className="hcp-create-customer-actions">
                   <button

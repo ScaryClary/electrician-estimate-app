@@ -1500,3 +1500,45 @@ body { margin: 0; }
   font-size: 13px;
   margin: 0;
 }
+
+/* ── Multiple recording uploads ─────────────────────────────────────────────── */
+.selected-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+.selected-files-list .file-info-compact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.selected-files-list .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selected-files-list .file-duration { color: var(--text-dim); font-size: 13px; }
+
+/* ── New-customer appointment fields ────────────────────────────────────────── */
+.hcp-appt-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.hcp-appt-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+.hcp-appt-radio input { accent-color: var(--accent); }
+.hcp-appt-fields {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+.hcp-appt-fields .field-input { flex: 1; }

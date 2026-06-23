@@ -1,6 +1,8 @@
 export interface LineItem {
   id: string
   type: 'labor' | 'material'
+  /** The project/job this line belongs to, e.g. "Install Tesla charger". Links labor + materials for the same job. */
+  jobGroup?: string
   description: string
   quantity: number
   unit: string // 'hrs', 'ea', 'ft', 'box', etc.
